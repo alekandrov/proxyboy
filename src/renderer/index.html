@@ -29,8 +29,12 @@
         <div class="side-item active" data-host="">Todos <span class="count" id="count-all">0</span></div>
         <div class="side-item" data-host="__pinned">📌 Fijados <span class="count" id="count-pinned">0</span></div>
       </div>
-      <div class="side-title">Dominios</div>
-      <div id="domains" class="side-section scroll"></div>
+      <div id="side-scroll">
+        <div class="side-title collapsible" data-section="apps"><span class="chev">▾</span> Apps <span class="count" id="count-apps"></span></div>
+        <div id="apps" class="side-section"></div>
+        <div class="side-title collapsible" data-section="domains"><span class="chev">▾</span> Dominios <span class="count" id="count-domains"></span></div>
+        <div id="domains" class="side-section"></div>
+      </div>
     </aside>
     <div class="resizer v" data-target="sidebar"></div>
 
@@ -54,7 +58,7 @@
       <div id="table">
         <div class="thead row">
           <div class="c id">#</div><div class="c status">Status</div><div class="c method">Método</div>
-          <div class="c host">Host</div><div class="c path">Path</div><div class="c type">Tipo</div>
+          <div class="c host">Host</div><div class="c path">Path</div><div class="c client">Cliente</div><div class="c type">Tipo</div>
           <div class="c dur">Tiempo</div><div class="c size">Tamaño</div>
         </div>
         <div id="rows-viewport" tabindex="0"><div id="rows-spacer"><div id="rows"></div></div></div>

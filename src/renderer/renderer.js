@@ -15,6 +15,10 @@ const S = {
   selected: new Set(),
   focusId: null,
   host: '',
+  appFilter: '',
+  expandedApps: new Set(store('expandedApps', [])),
+  collapsedSections: new Set(store('collapsedSections', [])),
+  icons: new Map(), // appId -> dataURL | null | 'loading'
   chip: 'all',
   query: '',
   pinned: new Set(store('pinned', [])),
@@ -102,7 +106,7 @@ function matchChip(f) {
 
 function matchQuery(f) {
   if (!S.query) return true;
-  const hay = `${f.method} ${f.url} ${f.status || ''} ${f.contentType} ${f.error || ''} ${f.tags.join(' ')}`.toLowerCase();
+  const hay = `${f.method} ${f.url} ${f.status || ''} ${f.contentType} ${f.error || ''} ${f.tags.join(' ')} ${f.app ? f.app.name : ''}`.toLowerCase();
   return S.query.toLowerCase().split(/\s+/).filter(Boolean).every((term) => {
     if (term.startsWith('-') && term.length > 1) return !hay.includes(term.slice(1));
     return hay.includes(term);
@@ -110,6 +114,7 @@ function matchQuery(f) {
 }
 
 function matchHost(f) {
+  if (S.appFilter && (!f.app || f.app.id !== S.appFilter)) return false;
   if (!S.host) return true;
   if (S.host === '__pinned') return S.pinned.has(f.host);
   return f.host === S.host;
@@ -138,6 +143,31 @@ function refresh() {
   });
 }
 
+// ---------------- Íconos de apps ----------------
+function appColor(name) {
+  let h = 0;
+  for (const ch of name || '?') h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `hsl(${h} 55% 45%)`;
+}
+function appIconHTML(app) {
+  if (!app) return '';
+  const icon = S.icons.get(app.id);
+  if (icon === undefined && app.source === 'process') {
+    S.icons.set(app.id, 'loading');
+    api.appIcon(app.id).then((url) => {
+      S.icons.set(app.id, url || null);
+      if (url) { lastSidebar = ''; refresh(); }
+    });
+  }
+  if (icon && icon !== 'loading') return `<img class="app-icon" src="${icon}" alt="">`;
+  return `<span class="app-icon letter" style="background:${appColor(app.name)}">${esc((app.name || '?').trim().charAt(0).toUpperCase())}</span>`;
+}
+function appSubtitle(app) {
+  if (!app) return '';
+  if (app.simulator) return `${app.device || 'Simulador'}${app.os ? ` · ${app.os}` : ''}`;
+  return app.device || '';
+}
+
 function renderRows() {
   const vp = $('#rows-viewport');
   const start = Math.max(0, Math.floor(vp.scrollTop / ROW_H) - 5);
@@ -157,6 +187,7 @@ function renderRows() {
       <div class="c method">${esc(f.method)}</div>
       <div class="c host" title="${esc(f.host)}">${lock}${esc(f.host)}</div>
       <div class="c path" title="${esc(f.url)}">${esc(f.path || '')}${tags}</div>
+      <div class="c client" title="${f.app ? esc(`${f.app.name}${appSubtitle(f.app) ? ` — ${appSubtitle(f.app)}` : ''}`) : ''}">${f.app ? `${appIconHTML(f.app)}<span>${esc(f.app.name)}</span>` : ''}</div>
       <div class="c type">${esc(shortType(f.contentType, f))}${f.wsCount ? ` · ${f.wsCount} msg` : ''}</div>
       <div class="c dur">${fmtDur(f.duration)}</div>
       <div class="c size">${f.resSize ? fmtSize(f.resSize) : ''}</div>
@@ -167,18 +198,54 @@ function renderRows() {
 
 let lastSidebar = '';
 function renderSidebar() {
-  const counts = new Map();
-  for (const f of S.flows) counts.set(f.host, (counts.get(f.host) || 0) + 1);
-  const hosts = [...counts.keys()].sort((a, b) => a.localeCompare(b));
+  const hostCounts = new Map();
+  const apps = new Map(); // id -> { app, count, hosts: Map }
   let pinnedCount = 0;
-  for (const f of S.flows) if (S.pinned.has(f.host)) pinnedCount++;
+  for (const f of S.flows) {
+    hostCounts.set(f.host, (hostCounts.get(f.host) || 0) + 1);
+    if (S.pinned.has(f.host)) pinnedCount++;
+    if (f.app) {
+      let a = apps.get(f.app.id);
+      if (!a) { a = { app: f.app, count: 0, hosts: new Map() }; apps.set(f.app.id, a); }
+      a.count++;
+      a.hosts.set(f.host, (a.hosts.get(f.host) || 0) + 1);
+    }
+  }
   $('#count-all').textContent = S.flows.length;
   $('#count-pinned').textContent = pinnedCount;
-  const html = hosts.map((h) => `<div class="side-item${S.host === h ? ' active' : ''}" data-host="${esc(h)}" title="${esc(h)}">
+  $('#count-apps').textContent = apps.size || '';
+  $('#count-domains').textContent = hostCounts.size || '';
+
+  const domainItem = (h, count, appId, child) => `<div class="side-item${child ? ' child' : ''}${S.host === h && S.appFilter === (appId || '') ? ' active' : ''}"
+      data-host="${esc(h)}" data-app="${esc(appId || '')}" title="${esc(h)}">
       ${S.pinned.has(h) ? '📌' : ''}<span class="name">${esc(h)}</span>${isSSLHost(h) ? '<span class="lock" title="SSL Proxying activo">🔓</span>' : ''}
-      <span class="count">${counts.get(h)}</span></div>`).join('');
-  if (html !== lastSidebar) { $('#domains').innerHTML = html; lastSidebar = html; }
-  $$('#sidebar .side-section:first-child .side-item').forEach((el) => el.classList.toggle('active', el.dataset.host === S.host));
+      <span class="count">${count}</span></div>`;
+
+  const appList = [...apps.values()].sort((x, y) => x.app.name.localeCompare(y.app.name));
+  let appsHTML = '';
+  for (const { app, count, hosts } of appList) {
+    const open = S.expandedApps.has(app.id);
+    const sub = appSubtitle(app);
+    appsHTML += `<div class="side-item${S.appFilter === app.id && !S.host ? ' active' : ''}" data-app="${esc(app.id)}" data-host=""
+        title="${esc(app.name)}${sub ? ` — ${esc(sub)}` : ''}${app.source === 'user-agent' ? ' (detectada por User-Agent)' : ''}">
+        <span class="twisty" data-act="toggle">${open ? '▾' : '▸'}</span>${appIconHTML(app)}
+        <span class="name-wrap"><span class="name">${esc(app.name)}</span>${sub ? `<span class="app-sub">${esc(sub)}</span>` : ''}</span>
+        <span class="count">${count}</span></div>`;
+    if (open) {
+      for (const h of [...hosts.keys()].sort((x, y) => x.localeCompare(y))) appsHTML += domainItem(h, hosts.get(h), app.id, true);
+    }
+  }
+  if (!appList.length) appsHTML = '<div class="note">Las apps aparecen al capturar tráfico</div>';
+  const domainsHTML = [...hostCounts.keys()].sort((a, b) => a.localeCompare(b)).map((h) => domainItem(h, hostCounts.get(h), '', false)).join('');
+
+  const key = [appsHTML, domainsHTML, S.host, S.appFilter, [...S.collapsedSections].join(',')].join('|#|');
+  if (key !== lastSidebar) {
+    $('#apps').innerHTML = S.collapsedSections.has('apps') ? '' : appsHTML;
+    $('#domains').innerHTML = S.collapsedSections.has('domains') ? '' : domainsHTML;
+    $$('.side-title.collapsible').forEach((t) => t.classList.toggle('collapsed', S.collapsedSections.has(t.dataset.section)));
+    lastSidebar = key;
+  }
+  $$('#sidebar .side-section:first-child .side-item').forEach((el) => el.classList.toggle('active', !S.appFilter && el.dataset.host === S.host));
 }
 
 // ---------------- Selección / Inspector ----------------
@@ -511,6 +578,7 @@ async function rowMenu(e, id) {
       : { label: `Habilitar SSL Proxying para ${f.host}`, run: () => addSSLHost(f.host) },
     { label: `Bloquear ${f.host}`, run: () => addBlockRule(`*://${f.host}*`) },
     { label: S.pinned.has(f.host) ? `Desfijar ${f.host}` : `Fijar ${f.host}`, run: () => togglePin(f.host) },
+    ...(f.app ? [{ label: `Ver solo ${f.app.name}`, run: () => { S.appFilter = f.app.id; S.host = ''; lastSidebar = ''; refresh(); } }] : []),
     '-',
     { label: S.selected.size > 1 ? `Exportar ${S.selected.size} como HAR…` : 'Exportar como HAR…', run: () => api.exportHAR(selectedIds()) },
     { label: 'Eliminar', run: deleteSelected },
@@ -999,15 +1067,34 @@ function bindUI() {
     }
   });
 
+  const toggleApp = (id) => {
+    if (S.expandedApps.has(id)) S.expandedApps.delete(id); else S.expandedApps.add(id);
+    persist('expandedApps', [...S.expandedApps]);
+    lastSidebar = ''; renderSidebar();
+  };
   $('#sidebar').addEventListener('click', (e) => {
+    const title = e.target.closest('.side-title.collapsible');
+    if (title) {
+      const sec = title.dataset.section;
+      if (S.collapsedSections.has(sec)) S.collapsedSections.delete(sec); else S.collapsedSections.add(sec);
+      persist('collapsedSections', [...S.collapsedSections]);
+      lastSidebar = ''; renderSidebar();
+      return;
+    }
     const it = e.target.closest('.side-item');
     if (!it) return;
-    S.host = it.dataset.host;
+    if (e.target.dataset.act === 'toggle') { toggleApp(it.dataset.app); return; }
+    S.host = it.dataset.host || '';
+    S.appFilter = it.dataset.app || '';
     lastSidebar = '';
     refresh();
   });
+  $('#sidebar').addEventListener('dblclick', (e) => {
+    const it = e.target.closest('#apps .side-item:not(.child)');
+    if (it) toggleApp(it.dataset.app);
+  });
   $('#sidebar').addEventListener('contextmenu', (e) => {
-    const it = e.target.closest('#domains .side-item');
+    const it = e.target.closest('#domains .side-item, #apps .side-item.child');
     if (!it) return;
     e.preventDefault();
     hostMenu(e, it.dataset.host);

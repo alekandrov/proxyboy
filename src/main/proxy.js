@@ -11,6 +11,7 @@ const { Duplex } = require('stream');
 const { URL } = require('url');
 const { Upstream, HOP_BY_HOP } = require('./upstream');
 const { FrameParser } = require('./websocket');
+const { ProcessResolver, appFromUserAgent, isLoopback } = require('./procinfo');
 const {
   wildcardToRegExp, hostMatches, findRule, applyMapRemote, runScriptHook,
 } = require('./rules');
@@ -126,6 +127,7 @@ function duplexOver(sock) {
   sock.on('close', () => d.destroy());
   sock.on('error', (e) => d.destroy(e));
   d.remoteAddress = sock.remoteAddress;
+  d._pbClient = sock._pbClient;
   d.remotePort = sock.remotePort;
   d.encrypted = true;
   d.alpnProtocol = 'h2';
@@ -136,8 +138,12 @@ function duplexOver(sock) {
 }
 
 class ProxyServer extends EventEmitter {
-  constructor({ ca, port = 9090, host = '0.0.0.0' } = {}) {
+  constructor({ ca, port = 9090, host = '0.0.0.0', resolveApps = true } = {}) {
     super();
+    // Identificación de la app que hace cada conexión
+    this.resolver = resolveApps ? new ProcessResolver(() => this.port) : null;
+    this.apps = new Map(); // id -> info completa (para íconos)
+    this.uaToApp = new Map(); // User-Agent -> app detectada por proceso (para conexiones que cierran antes de resolverse)
     this.ca = ca;
     this.port = port;
     this.listenHost = host;
@@ -168,6 +174,7 @@ class ProxyServer extends EventEmitter {
     this.sockets = new Set();
     this.server.on('connection', (sock) => {
       this.sockets.add(sock);
+      sock._pbClient = this._clientHolder(sock);
       sock.on('close', () => this.sockets.delete(sock));
     });
     this.server.on('request', (req, res) => this._onRequest(req, res, { mitm: false }));
@@ -183,6 +190,8 @@ class ProxyServer extends EventEmitter {
 
     this.h2Server = http2.createServer({ settings: { enableConnectProtocol: false } });
     this.h2Server.on('request', (req, res) => this._onRequest(req, res, { mitm: true, h2: true }));
+    // req.socket en HTTP/2 es un Proxy que no expone nuestras propiedades: pasamos la info por la sesión
+    this.h2Server.on('session', (session) => { session._pbClient = this._h2PendingClient; this._h2PendingClient = null; });
     this.h2Server.on('sessionError', () => {});
     this.h2Server.on('streamError', () => {});
   }
@@ -226,7 +235,50 @@ class ProxyServer extends EventEmitter {
   }
 
   // ---------- Flows ----------
-  _newFlow(data) {
+  _clientHolder(sock) {
+    const holder = { app: null, ready: null, settled: false };
+    if (this.resolver && isLoopback(sock.remoteAddress)) {
+      holder.ready = this.resolver.lookup(sock.remotePort).then((app) => {
+        holder.settled = true;
+        if (app) { holder.app = app; this.apps.set(app.id, app); }
+        return app;
+      });
+    }
+    return holder;
+  }
+
+  // Espera (con tope) a conocer la app del cliente: si respondemos antes, una conexión corta
+  // puede cerrarse antes de que podamos ver qué proceso la abrió. Solo afecta al primer request de cada conexión.
+  _waitClient(holder) {
+    if (!holder || !holder.ready || holder.settled) return null;
+    return Promise.race([holder.ready, new Promise((r) => setTimeout(r, 300))]);
+  }
+
+  // Asigna la app al flow: la del proceso si ya se conoce; si no, el User-Agent y luego el proceso cuando se resuelva
+  _attachApp(flow, sock, headers) {
+    const holder = sock && sock._pbClient;
+    const uaString = pairsGet(headers || [], 'user-agent');
+    if (holder && holder.app) {
+      flow.app = holder.app;
+      if (uaString) this.uaToApp.set(uaString, holder.app);
+      return;
+    }
+    const learned = uaString && this.uaToApp.get(uaString);
+    const ua = learned || appFromUserAgent(uaString, flow.client);
+    if (ua) { flow.app = ua; this.apps.set(ua.id, ua); }
+    if (holder && holder.ready) {
+      holder.ready.then((app) => {
+        if (!app) return;
+        if (uaString) {
+          if (this.uaToApp.size > 500) this.uaToApp.clear();
+          this.uaToApp.set(uaString, app);
+        }
+        if (!flow.app || flow.app.id !== app.id) { flow.app = app; this._update(flow); }
+      });
+    }
+  }
+
+  _newFlow(data, sock, headers) {
     const flow = {
       id: this.nextId++,
       startedAt: Date.now(),
@@ -238,6 +290,7 @@ class ProxyServer extends EventEmitter {
       notes: [],
       ...data,
     };
+    this._attachApp(flow, sock, headers);
     if (!this.settings.recording) {
       flow._ephemeral = true;
       return flow;
@@ -289,6 +342,7 @@ class ProxyServer extends EventEmitter {
       error: f.error || null,
       tags: f.tags,
       client: f.client,
+      app: f.app ? { id: f.app.id, name: f.app.name, simulator: !!f.app.simulator, device: f.app.device, os: f.app.os, source: f.app.source } : null,
       wsCount: f.ws ? f.ws.length : 0,
     };
   }
@@ -396,7 +450,7 @@ class ProxyServer extends EventEmitter {
       url: target.toString(),
       httpVersion: req.httpVersion,
       client: req.socket ? req.socket.remoteAddress : undefined,
-    });
+    }, ctx.h2 ? { _pbClient: req.stream && req.stream.session && req.stream.session._pbClient } : req.socket, rawHeadersToPairs(req.rawHeaders));
     flow.request.headers = rawHeadersToPairs(req.rawHeaders);
     // Para HTTP/2 agregamos Host para que la vista sea coherente con HTTP/1.1
     if (ctx.h2 && !pairsGet(flow.request.headers, 'host')) flow.request.headers.unshift(['Host', target.host]);
@@ -410,6 +464,8 @@ class ProxyServer extends EventEmitter {
 
   async _handle(req, res, ctx, flow, target) {
     const rules = this.rules;
+    const clientHolder = ctx.h2 ? req.stream && req.stream.session && req.stream.session._pbClient : req.socket && req.socket._pbClient;
+    const clientReady = this._waitClient(clientHolder);
     let method = req.method;
     let url = flow.url;
     let headers = flow.request.headers;
@@ -501,7 +557,10 @@ class ProxyServer extends EventEmitter {
 
     // Map Local (mock): se evalúa sobre el request final (solo si ya leímos el body)
     const mock = bufferRequest ? findRule(rules.mapLocal, method, flow.url) : null;
-    if (mock) return this._respondMock(flow, res, ctx, mock);
+    if (mock) {
+      await clientReady;
+      return this._respondMock(flow, res, ctx, mock);
+    }
 
     // ---- Envío al servidor ----
     const up = this.upstream.request({
@@ -534,7 +593,7 @@ class ProxyServer extends EventEmitter {
       req.on('error', (e) => { up.destroy(); this._fail(flow, e, res); });
     }
 
-    const { meta, stream } = await responsePromise;
+    const [{ meta, stream }] = await Promise.all([responsePromise, clientReady]);
     flow.timings.responseStart = Date.now();
     flow.response = {
       statusCode: meta.statusCode,
@@ -751,7 +810,7 @@ Ajustes → General → Información → Ajustes de confianza de certificados.</
     const flow = this._newFlow({
       method: 'CONNECT', scheme: 'https', host, port, path: '', url: `${host}:${port}`,
       httpVersion: req.httpVersion, client: clientSocket.remoteAddress,
-    });
+    }, clientSocket, rawHeadersToPairs(req.rawHeaders));
     flow.request.headers = rawHeadersToPairs(req.rawHeaders);
     flow.tags.push('tunnel');
     const upstream = net.connect(port, host, () => {
@@ -797,10 +856,14 @@ Ajustes → General → Información → Ajustes de confianza de certificados.</
       ALPNProtocols: this.settings.http2 && allowH2 ? ['h2', 'http/1.1'] : ['http/1.1'],
     });
     tlsSocket._proxyboyTarget = { host, port };
+    tlsSocket._pbClient = clientSocket._pbClient;
     let established = false;
     tlsSocket.on('secure', () => {
       established = true;
-      if (tlsSocket.alpnProtocol === 'h2') this.h2Server.emit('connection', duplexOver(tlsSocket));
+      if (tlsSocket.alpnProtocol === 'h2') {
+        this._h2PendingClient = tlsSocket._pbClient;
+        this.h2Server.emit('connection', duplexOver(tlsSocket));
+      }
       else this.mitmServer.emit('connection', tlsSocket);
     });
     tlsSocket.on('error', (err) => {
@@ -809,7 +872,7 @@ Ajustes → General → Información → Ajustes de confianza de certificados.</
         const flow = this._newFlow({
           method: 'CONNECT', scheme: 'https', host: sniHost, port, path: '', url: `${sniHost}:${port}`,
           client: clientSocket.remoteAddress,
-        });
+        }, clientSocket);
         flow.tags.push('ssl-error');
         this._fail(flow, new Error(`Handshake TLS fallido (¿el cliente confía en el certificado de Proxyboy? ¿SSL pinning?): ${err.message}`));
       }
@@ -837,7 +900,7 @@ Ajustes → General → Información → Ajustes de confianza de certificados.</
       method: req.method, scheme: secure ? 'wss' : 'ws', host: target.hostname, port,
       path: target.pathname + target.search, url: target.toString(), httpVersion: req.httpVersion,
       client: clientSocket.remoteAddress,
-    });
+    }, clientSocket, rawHeadersToPairs(req.rawHeaders));
     flow.request.headers = rawHeadersToPairs(req.rawHeaders);
     flow.tags.push('websocket');
     flow.ws = [];

@@ -21,7 +21,8 @@ proxy.on('flow-update', (f) => {
   if (f.state === 'pending' || f.state === 'tunnel') return;
   const status = f.status || 'ERR';
   const ms = f.duration != null ? `${f.duration}ms` : '';
-  console.log(`${String(status).padEnd(4)} ${f.method.padEnd(7)} ${f.url} ${ms}${f.error ? `  ✖ ${f.error}` : ''}`);
+  const app = f.app ? `[${f.app.name}${f.app.device ? ` · ${f.app.device}` : ''}] ` : '';
+  console.log(`${String(status).padEnd(4)} ${f.method.padEnd(7)} ${app}${f.url} ${ms}${f.error ? `  ✖ ${f.error}` : ''}`);
 });
 
 proxy.start().then((port) => {

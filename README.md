@@ -8,7 +8,8 @@ Hecho con **Electron + Node.js**, sin servicios externos: todo corre en tu máqu
 - **Captura HTTP y HTTPS** (MITM con CA local generada en tu equipo).
 - **SSL Proxying por dominio** con comodines (`*.uala.com.ar`) o para todo; el resto pasa como túnel sin descifrar.
 - **Inspector** de request/response lado a lado: headers, query, body (Pretty JSON / Raw / Hex / imágenes), cookies, raw y timing. Descomprime gzip, deflate, br y zstd.
-- **Sidebar de dominios**, fijados, filtros por tipo (JSON, imágenes, errores…) y búsqueda (`-texto` excluye).
+- **Apps**: cada request muestra qué app lo hizo, con su ícono (Chrome, Slack, curl…). Las apps del **simulador de iOS** aparecen con su nombre, ícono y dispositivo (ej. "Ualá-Stage · iPhone 17 Pro · iOS 26.2"). Los celulares conectados por Wi-Fi se identifican por User-Agent.
+- **Sidebar** con Apps (expandibles por dominio), dominios, fijados, filtros por tipo (JSON, imágenes, errores…) y búsqueda (`-texto` excluye).
 - **Repetir** y **Editar y repetir** (doble clic), **Nuevo request** (⌘/Ctrl+N).
 - **Copiar como cURL**, copiar URL/body, **exportar HAR**.
 - **HTTP/2** hacia el cliente y hacia el servidor (negociado por ALPN), con trailers: funciona con **gRPC**.
@@ -95,6 +96,7 @@ Los scripts corren en un sandbox de Node (`vm`) con timeout de 2 s. No es un ais
 | `src/main/upstream.js` | Conexiones al servidor real (HTTP/1.1 y HTTP/2 con ALPN y sesiones reutilizables) |
 | `src/main/rules.js` | Matching con comodines, Map Remote y sandbox de scripts |
 | `src/main/websocket.js` | Parser de frames WebSocket |
+| `src/main/procinfo.js` | Identifica la app de cada conexión (lsof / netstat / ss + bundle, simulador iOS, User-Agent) |
 | `src/main/ca.js` | CA raíz y certificados por host (node-forge) |
 | `src/main/system.js` | Proxy del sistema y confianza del certificado por SO |
 | `src/main/main.js` | Proceso principal de Electron e IPC |
@@ -107,4 +109,5 @@ Los datos (CA, configuración) se guardan en la carpeta de datos de la app (`~/L
 - WebSocket sobre HTTP/2 (RFC 8441) no se intercepta: los clientes usan HTTP/1.1 para WebSocket.
 - Para leer los mensajes WebSocket, Proxyboy quita la compresión `permessage-deflate` del handshake.
 - Los requests con breakpoint o script se bufferizan completos (hasta 50 MB).
+- Para identificar la app, el primer request de cada conexión local espera hasta 300 ms a que se resuelva el proceso (en la práctica corre en paralelo con el request al servidor).
 - Probado en macOS. El código para Windows (proxy del sistema vía registro, certificado vía `certutil`) todavía no se probó en una máquina Windows.

@@ -263,6 +263,24 @@ function wsServer() {
     assert.ok(Buffer.from(d.response.body.base64, 'base64').toString().includes('otra vez'));
   });
 
+  await check('Identifica la app (proceso) que hizo cada request, también por HTTP/2', async () => {
+    for (const p of ['/hola', '/seguro', '/h2cliente']) {
+      const f = lastFlow(p);
+      assert.ok(f.app, `sin app en ${p}`);
+      assert.strictEqual(f.app.name, 'curl', `${p}: ${f.app.name} (${f.app.source})`);
+      assert.strictEqual(f.app.source, 'process');
+    }
+  });
+
+  await check('App por User-Agent (celulares / respaldo)', async () => {
+    const { appFromUserAgent } = require('../src/main/procinfo');
+    const ios = appFromUserAgent('Ual%C3%A1/7.0.4 CFNetwork/1568.100.1 Darwin/24.0.0', '192.168.0.23');
+    assert.strictEqual(ios.name, 'Ualá');
+    assert.strictEqual(ios.device, 'iOS · 192.168.0.23');
+    assert.strictEqual(appFromUserAgent('okhttp/4.12.0', '10.0.0.5').device, 'Android · 10.0.0.5');
+    assert.strictEqual(appFromUserAgent('Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/120 Safari/537.36').name, 'Google Chrome');
+  });
+
   await check('Exportar HAR', async () => {
     const har = proxy.toHAR();
     assert.ok(har.log.entries.length >= 10);

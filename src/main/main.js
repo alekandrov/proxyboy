@@ -1,5 +1,7 @@
 // Proceso principal de Electron: arranca el proxy, persiste la configuración y habla con la UI.
-const { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, shell } = require('electron');
+const {
+  app, BrowserWindow, ipcMain, dialog, Menu, clipboard, shell, nativeImage,
+} = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { CertificateAuthority } = require('./ca');
@@ -50,6 +52,23 @@ function applySettingsToProxy() {
     block: settings.blockRules,
     breakpoints: settings.breakpointRules,
     scripts: settings.scriptRules,
+  });
+}
+
+// ---------------- Íconos .icns (macOS) ----------------
+// nativeImage no lee .icns: lo convertimos una vez a PNG con `sips` (incluido en macOS) y lo cacheamos
+function icnsToDataURL(icns) {
+  const dir = path.join(app.getPath('userData'), 'icon-cache');
+  const out = path.join(dir, `${require('crypto').createHash('sha1').update(icns).digest('hex')}.png`);
+  const load = () => {
+    const img = nativeImage.createFromPath(out);
+    return img.isEmpty() ? null : img.toDataURL();
+  };
+  if (fs.existsSync(out)) return Promise.resolve(load());
+  fs.mkdirSync(dir, { recursive: true });
+  return new Promise((resolve) => {
+    require('child_process').execFile('sips', ['-s', 'format', 'png', '--resampleHeightWidthMax', '64', icns, '--out', out],
+      { timeout: 5000 }, (err) => resolve(err ? null : load()));
   });
 }
 
@@ -227,6 +246,25 @@ function registerIPC() {
     return true;
   });
   ipcMain.handle('cert:reveal', () => shell.showItemInFolder(ca.caCertPath));
+
+  // Íconos de apps: PNG del bundle (apps del simulador iOS) o ícono del sistema (apps de macOS / .exe de Windows)
+  const iconCache = new Map();
+  ipcMain.handle('app:icon', async (_e, id) => {
+    if (iconCache.has(id)) return iconCache.get(id);
+    const info = proxy.apps.get(id);
+    let url = null;
+    try {
+      if (info && info.iconFile) {
+        const img = nativeImage.createFromPath(info.iconFile);
+        if (!img.isEmpty()) url = img.resize({ width: 32, height: 32, quality: 'best' }).toDataURL();
+      }
+      if (!url && info && info.icnsFile) url = await icnsToDataURL(info.icnsFile);
+      // En Windows/Linux el sistema devuelve el ícono real del .exe; en macOS devuelve uno genérico
+      if (!url && info && info.exe && process.platform !== 'darwin') url = (await app.getFileIcon(info.exe, { size: 'normal' })).toDataURL();
+    } catch { /* sin ícono */ }
+    if (info) iconCache.set(id, url);
+    return url;
+  });
 
   ipcMain.handle('breakpoint:resolve', (_e, bpId, decision) => {
     const resolve = pendingBreakpoints.get(bpId);
