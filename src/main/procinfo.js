@@ -142,6 +142,9 @@ function findIosIcon(bundle, plist) {
 
 async function describeExe(pid, { exe, description }) {
   const base = path.basename(exe || '').replace(/\.exe$/i, '');
+  // Tráfico de Android: el emulador (qemu) o adb (dispositivo USB con `adb reverse`) hacen de cliente
+  if (/^qemu-system-|^emulator/i.test(base)) return { id: 'android:emulator', name: 'Emulador Android', pid, exe, source: 'process', android: true };
+  if (/^adb$/i.test(base)) return { id: 'android:usb', name: 'Android (USB)', pid, exe, source: 'process', android: true };
   const info = { id: exe, name: description || base || `PID ${pid}`, pid, exe, source: 'process' };
   if (platform !== 'darwin' || !exe) return info;
 

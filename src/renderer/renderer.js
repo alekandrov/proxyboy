@@ -825,6 +825,8 @@ function openCertificate() {
     ${(a.simulators || []).length ? a.simulators.map((s) => `<div class="sim-row">📱 <b>${esc(s.name)}</b> <span class="muted">${esc(s.os)}</span>
       <span class="tb-flex"></span>${a.simulatorsWithCert.includes(s.udid) ? '<span class="s-ok">✔ instalado</span>' : '<span class="muted">sin instalar</span>'}</div>`).join('')
     : '<div class="muted">No hay simuladores encendidos.</div>'}` : ''}
+    <h3 style="margin:6px 0 0">Android (emuladores y USB)</h3>
+    ${androidSectionHTML(a)}
     <h3 style="margin:6px 0 0">Celulares por Wi-Fi</h3>
     <div>1. Configurá el proxy HTTP del Wi-Fi del dispositivo a:<br><span class="mono">${ips}</span></div>
     <div>2. Desde el dispositivo abrí <b class="mono">http://proxy.boy</b> y descargá el certificado.</div>
@@ -832,7 +834,7 @@ function openCertificate() {
     Android 7+: las apps deben confiar en CAs de usuario vía network_security_config (solo builds debug).</div>`,
   [
     ...((a.simulators || []).length ? [{
-      label: 'Instalar en simuladores', run: async () => {
+      label: 'Instalar en simuladores iOS', run: async () => {
         await installCertInSims(a.simulators.map((s) => s.udid));
         openCertificate();
         return true;
@@ -849,6 +851,48 @@ function openCertificate() {
       },
     }] : []),
   ]);
+  $('#modal .m-body').onclick = async (e) => {
+    const b = e.target.closest('[data-android]');
+    if (!b) return;
+    const serial = b.dataset.serial;
+    b.disabled = true;
+    try {
+      if (b.dataset.android === 'setup') {
+        const r = await api.androidSetup(serial);
+        toast(`Proxy ${r.proxy} configurado y certificado copiado. Terminá la instalación en el dispositivo.`);
+      } else if (b.dataset.android === 'clear') {
+        await api.androidClear(serial);
+        toast('Proxy quitado del dispositivo');
+      } else if (b.dataset.android === 'refresh') {
+        toast('Buscando dispositivos…');
+      }
+    } catch (err) { toast(`Error: ${err.message.split('\n')[0]}`); }
+    S.app = await api.state();
+    openCertificate();
+  };
+}
+
+function androidSectionHTML(a) {
+  if (a.androidDevices === null || a.androidDevices === undefined) {
+    return '<div class="muted">No se encontró <span class="mono">adb</span>. Instalá Android Studio (SDK platform-tools) o definí ANDROID_HOME.</div>';
+  }
+  const rows = a.androidDevices.map((d) => {
+    if (d.state !== 'device') {
+      return `<div class="sim-row">🤖 <b>${esc(d.name)}</b><span class="tb-flex"></span><span class="muted">${d.state === 'unauthorized' ? 'aceptá la depuración USB en el teléfono' : esc(d.state)}</span></div>`;
+    }
+    const status = d.usingProxyboy ? '<span class="s-ok">✔ usando Proxyboy</span>'
+      : d.proxy ? `<span class="s-4xx" title="Otro proxy configurado">proxy: ${esc(d.proxy)}</span>` : '<span class="muted">sin proxy</span>';
+    return `<div class="sim-row">🤖 <b>${esc(d.name)}</b> <span class="muted">${d.emulator ? 'Emulador' : 'USB'} · Android ${esc(d.android || '?')}</span>
+      <span class="tb-flex"></span>${status}
+      ${d.usingProxyboy ? `<button class="btn" data-android="clear" data-serial="${esc(d.serial)}">Quitar proxy</button>` : ''}
+      <button class="btn${d.usingProxyboy ? '' : ' primary'}" data-android="setup" data-serial="${esc(d.serial)}">${d.usingProxyboy ? 'Recopiar certificado' : 'Configurar'}</button></div>`;
+  }).join('');
+  return `${rows || '<div class="muted">No hay emuladores ni dispositivos conectados. Abrí un emulador o conectá el teléfono con depuración USB.</div>'}
+    <div class="row-inline"><button class="btn" data-android="refresh">Buscar de nuevo</button></div>
+    <div class="muted">"Configurar" pone el proxy en el dispositivo, copia el certificado a <span class="mono">Descargas/proxyboy-ca.crt</span>
+    y abre Ajustes. Ahí: <b>Seguridad → Más ajustes de seguridad → Encriptación y credenciales → Instalar un certificado → Certificado de CA</b>.
+    La app tiene que confiar en CAs de usuario (<span class="mono">network_security_config</span> con <span class="mono">&lt;certificates src="user"/&gt;</span> en debug).
+    Al cerrar Proxyboy se quita el proxy del dispositivo.</div>`;
 }
 
 // ---------- Reglas ----------

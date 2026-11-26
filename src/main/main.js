@@ -7,6 +7,10 @@ const fs = require('fs');
 const { CertificateAuthority } = require('./ca');
 const { ProxyServer } = require('./proxy');
 const system = require('./system');
+const android = require('./android');
+
+// Dispositivos Android a los que les pusimos el proxy: se lo sacamos al salir para no dejarlos sin internet
+const androidOwned = new Set();
 
 let win;
 let proxy;
@@ -129,6 +133,8 @@ async function state() {
     caTrusted: await system.isCertificateTrusted(ca.caCertPath, ca.caCert.subject.getField('CN').value),
     simulators: await system.bootedSimulators(),
     simulatorsWithCert: settings.simulatorsWithCert || [],
+    androidDevices: await android.listDevices(proxy.port), // null si no hay SDK de Android
+    androidWithCert: settings.androidWithCert || [],
     systemProxy: await system.isSystemProxyEnabled(proxy.port),
     ips: system.localIPs(),
   };
@@ -261,6 +267,17 @@ function registerIPC() {
     return { done, failed };
   });
   ipcMain.handle('sim:restart-app', (_e, udid, bundleId) => system.restartSimulatorApp(udid, bundleId));
+  ipcMain.handle('android:setup', async (_e, serial) => {
+    const r = await android.setup(serial, proxy.port, ca.caCertPath);
+    androidOwned.add(serial);
+    settings.androidWithCert = [...new Set([...(settings.androidWithCert || []), serial])];
+    saveSettings();
+    return r;
+  });
+  ipcMain.handle('android:clear', async (_e, serial) => {
+    await android.clearProxy(serial, proxy.port);
+    androidOwned.delete(serial);
+  });
 
   // Íconos de apps: PNG del bundle (apps del simulador iOS) o ícono del sistema (apps de macOS / .exe de Windows)
   const iconCache = new Map();
@@ -324,6 +341,10 @@ app.whenReady().then(async () => {
     // Quedó activo de una sesión anterior que se cerró mal: lo tomamos como nuestro para restaurarlo al salir
     systemProxyOwned = true;
   }
+  // Emuladores que quedaron apuntando a Proxyboy de una sesión anterior: los restauramos al salir
+  try {
+    for (const d of (await android.listDevices(proxy.port)) || []) if (d.usingProxyboy) androidOwned.add(d.serial);
+  } catch { /* sin adb */ }
   registerIPC();
   buildMenu();
   createWindow();
@@ -332,11 +353,12 @@ app.whenReady().then(async () => {
 
 let quitting = false;
 app.on('before-quit', async (e) => {
-  if (quitting || !systemProxyOwned) return;
-  // Restauramos el proxy del sistema para no dejar al usuario sin internet
+  if (quitting || (!systemProxyOwned && !androidOwned.size)) return;
+  // Restauramos el proxy del sistema y el de los dispositivos Android para no dejarlos sin internet
   e.preventDefault();
   quitting = true;
-  try { await system.disableSystemProxy(); } catch { /* ignorar */ }
+  if (systemProxyOwned) { try { await system.disableSystemProxy(); } catch { /* ignorar */ } }
+  await Promise.all([...androidOwned].map((serial) => android.clearProxy(serial, proxy.port).catch(() => {})));
   app.quit();
 });
 

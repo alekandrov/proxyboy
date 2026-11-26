@@ -41,6 +41,13 @@ npm start
 3. Elegí qué descifrar: clic derecho sobre una app → *Habilitar SSL Proxying para todo el tráfico de…*, o sobre un dominio, o agregá patrones en **SSL** (ej. `*.ua.la`).
 4. Las apps reutilizan conexiones abiertas: si no ves requests nuevos, reiniciá la app (para apps del simulador: clic derecho → *Reiniciar en el simulador*).
 
+### Emulador Android o teléfono por USB
+En **Certificado → Android**, tocá **Configurar** en el dispositivo: pone el proxy (`10.0.2.2` en emuladores, `adb reverse` en USB),
+copia el certificado a `Descargas/proxyboy-ca.crt` y abre Ajustes. En el dispositivo: Seguridad → Más ajustes de seguridad →
+Encriptación y credenciales → Instalar un certificado → **Certificado de CA**. La app tiene que confiar en CAs de usuario
+(`network_security_config` con `<certificates src="user"/>` en `debug-overrides`). Al cerrar Proxyboy se quita el proxy del dispositivo.
+El tráfico aparece en Apps como **Emulador Android** o **Android (USB)**. Necesita `adb` (Android SDK platform-tools).
+
 ### Celular / simulador
 Poné el proxy HTTP del Wi-Fi en `IP-de-tu-compu:9090`, abrí `http://proxy.boy` y descargá el certificado.
 - iOS: además activá la confianza en Ajustes → General → Información → Confianza de certificados.
@@ -98,6 +105,7 @@ Los scripts corren en un sandbox de Node (`vm`) con timeout de 2 s. No es un ais
 | `src/main/rules.js` | Matching con comodines, Map Remote y sandbox de scripts |
 | `src/main/websocket.js` | Parser de frames WebSocket |
 | `src/main/procinfo.js` | Identifica la app de cada conexión (lsof / netstat / ss + bundle, simulador iOS, User-Agent) |
+| `src/main/android.js` | Emuladores y dispositivos Android vía adb (proxy, certificado, restaurar al salir) |
 | `src/main/ca.js` | CA raíz y certificados por host (node-forge) |
 | `src/main/system.js` | Proxy del sistema y confianza del certificado por SO |
 | `src/main/main.js` | Proceso principal de Electron e IPC |

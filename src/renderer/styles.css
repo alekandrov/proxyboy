@@ -240,7 +240,9 @@ code.box { display: block; padding: 8px; background: var(--bg-2); border-radius:
 #hint-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #f59e0b22; border-bottom: 1px solid #f59e0b55; font-size: 12px; flex-wrap: wrap; }
 #hint-bar .tb-flex { flex: 1; }
 #empty-filter { pointer-events: auto; }
-.sim-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; }
+.sim-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; flex-wrap: wrap; }
+.sim-row .btn { padding: 3px 10px; }
+.row-inline { display: flex; gap: 8px; }
 
 /* Apps */
 #side-scroll { flex: 1; overflow-y: auto; padding-bottom: 8px; }
