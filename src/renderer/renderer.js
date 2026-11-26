@@ -871,6 +871,14 @@ function openCertificate() {
       } else if (b.dataset.android === 'clear') {
         await api.androidClear(serial);
         toast('Proxy quitado del dispositivo');
+      } else if (b.dataset.android === 'vpn-start') {
+        toast('Instalando Proxyboy VPN…');
+        const r = await api.androidVpnStart(serial, b.dataset.device);
+        toast(r.certInstalled ? `VPN activa (${r.proxy}) y certificado de Proxyboy instalado en el dispositivo`
+          : `VPN activa (${r.proxy}). El certificado quedó en Descargas/proxyboy-ca.crt: instalalo desde Ajustes → Seguridad`);
+      } else if (b.dataset.android === 'vpn-stop') {
+        await api.androidVpnStop(serial);
+        toast('VPN apagada');
       } else if (b.dataset.android === 'refresh') {
         toast('Buscando dispositivos…');
       }
@@ -888,19 +896,28 @@ function androidSectionHTML(a) {
     if (d.state !== 'device') {
       return `<div class="sim-row">🤖 <b>${esc(d.name)}</b><span class="tb-flex"></span><span class="muted">${d.state === 'unauthorized' ? 'aceptá la depuración USB en el teléfono' : esc(d.state)}</span></div>`;
     }
-    const status = d.usingProxyboy ? '<span class="s-ok">✔ usando Proxyboy</span>'
-      : d.proxy ? `<span class="s-4xx" title="Otro proxy configurado">proxy: ${esc(d.proxy)}</span>` : '<span class="muted">sin proxy</span>';
+    const status = d.vpnActive ? '<span class="s-ok">✔ VPN activa</span>'
+      : d.usingProxyboy ? '<span class="s-ok">✔ usando Proxyboy</span>'
+        : d.proxy ? `<span class="s-4xx" title="Otro proxy configurado">proxy: ${esc(d.proxy)}</span>` : '<span class="muted">sin proxy</span>';
+    const device = `${d.name} · Android ${d.android || '?'}`;
     return `<div class="sim-row">🤖 <b>${esc(d.name)}</b> <span class="muted">${d.emulator ? 'Emulador' : 'USB'} · Android ${esc(d.android || '?')}</span>
       <span class="tb-flex"></span>${status}
       ${d.usingProxyboy ? `<button class="btn" data-android="clear" data-serial="${esc(d.serial)}">Quitar proxy</button>` : ''}
-      <button class="btn${d.usingProxyboy ? '' : ' primary'}" data-android="setup" data-serial="${esc(d.serial)}">${d.usingProxyboy ? 'Recopiar certificado' : 'Configurar'}</button></div>`;
+      <button class="btn" data-android="setup" data-serial="${esc(d.serial)}" title="Proxy HTTP de Android + certificado">${d.usingProxyboy ? 'Recopiar certificado' : 'Proxy'}</button>
+      ${d.vpnActive ? `<button class="btn" data-android="vpn-stop" data-serial="${esc(d.serial)}">Apagar VPN</button>`
+        : `<button class="btn primary" data-android="vpn-start" data-serial="${esc(d.serial)}" data-device="${esc(device)}"
+          title="Instala la app Proxyboy VPN: captura también Flutter, React Native y apps que ignoran el proxy">Activar VPN</button>`}</div>`;
   }).join('');
   return `${rows || '<div class="muted">No hay emuladores ni dispositivos conectados. Abrí un emulador o conectá el teléfono con depuración USB.</div>'}
     <div class="row-inline"><button class="btn" data-android="refresh">Buscar de nuevo</button></div>
-    <div class="muted">"Configurar" pone el proxy en el dispositivo, copia el certificado a <span class="mono">Descargas/proxyboy-ca.crt</span>
+    <div class="muted"><b>Activar VPN</b> (recomendado) instala la app <b>Proxyboy VPN</b> y manda todo el tráfico del dispositivo a Proxyboy,
+    incluso el de apps que ignoran el proxy de Android (Flutter, React Native). Cada request aparece con el nombre de la app que lo hizo.
+    En emuladores con imagen <b>Google APIs</b> (permiten root) también instala el certificado; en el resto hay que instalarlo desde Ajustes.
+    Después hacé clic derecho sobre la app → SSL Proxying para descifrar su tráfico.</div>
+    <div class="muted">"Proxy" pone el proxy HTTP de Android, copia el certificado a <span class="mono">Descargas/proxyboy-ca.crt</span>
     y abre Ajustes. Ahí: <b>Seguridad → Más ajustes de seguridad → Encriptación y credenciales → Instalar un certificado → Certificado de CA</b>.
     La app tiene que confiar en CAs de usuario (<span class="mono">network_security_config</span> con <span class="mono">&lt;certificates src="user"/&gt;</span> en debug).
-    Al cerrar Proxyboy se quita el proxy del dispositivo.</div>`;
+    Al cerrar Proxyboy se quita el proxy y se apaga la VPN.</div>`;
 }
 
 // ---------- Reglas ----------

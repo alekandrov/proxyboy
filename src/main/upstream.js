@@ -4,6 +4,7 @@ const https = require('https');
 const http2 = require('http2');
 const tls = require('tls');
 const net = require('net');
+const trust = require('./trust');
 const { EventEmitter } = require('events');
 
 // Headers que no se reenvían entre saltos
@@ -38,7 +39,7 @@ class Upstream {
   constructor() {
     this.agents = {
       http: new http.Agent({ keepAlive: true, maxSockets: 256 }),
-      https: new https.Agent({ keepAlive: true, maxSockets: 256 }),
+      https: new https.Agent({ keepAlive: true, maxSockets: 256, secureContext: trust.secureContext() }),
       httpsInsecure: new https.Agent({ keepAlive: true, maxSockets: 256, rejectUnauthorized: false }),
     };
     this.sessions = new Map(); // key -> Promise<ClientHttp2Session|null>
@@ -60,7 +61,7 @@ class Upstream {
     const p = new Promise((resolve, reject) => {
       const socket = tls.connect({
         host, port, servername: net.isIP(host) ? undefined : host,
-        ALPNProtocols: ['h2', 'http/1.1'], rejectUnauthorized: verify,
+        ALPNProtocols: ['h2', 'http/1.1'], rejectUnauthorized: verify, secureContext: verify ? trust.secureContext() : undefined,
       });
       socket.once('error', (e) => { this.sessions.delete(key); reject(e); });
       socket.once('secureConnect', () => {

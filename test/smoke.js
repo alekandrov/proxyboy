@@ -292,6 +292,50 @@ function wsServer() {
     assert.strictEqual(appFromUserAgent('Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/120 Safari/537.36').name, 'Google Chrome');
   });
 
+  await check('VPN de Android: app por headers del CONNECT, HTTP plano y SSL Proxying por paquete', async () => {
+    // Igual que la app Proxyboy VPN: CONNECT con la app que abrió la conexión y luego el tráfico original
+    const viaVpn = (target, extra, payload, tlsHost) => new Promise((resolve, reject) => {
+      const s = net.connect(port, '127.0.0.1', () => {
+        s.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\nX-Proxyboy-App: com.ejemplo.flutter\r\n`
+          + `X-Proxyboy-App-Name: Ejemplo%20Fl%C3%BAtter\r\nX-Proxyboy-Device: Pixel%209%20%C2%B7%20Android%2016\r\n${extra}\r\n`);
+      });
+      s.once('data', (d) => {
+        if (!/^HTTP\/1\.1 200/.test(d.toString())) return reject(new Error(d.toString()));
+        const sock = tlsHost ? tls.connect({ socket: s, servername: tlsHost, ca: ca.caCertPem }) : s;
+        let out = '';
+        sock.on('data', (c) => { out += c; });
+        sock.on('end', () => resolve(out));
+        sock.on('error', reject);
+        sock.write(payload);
+      });
+      s.on('error', reject);
+    });
+    const req = (p) => `GET ${p} HTTP/1.1\r\nHost: localhost:${hp}\r\nConnection: close\r\n\r\n`;
+    assert.match(await viaVpn(`localhost:${hp}`, 'X-Proxyboy-Intercept: 1\r\n', req('/vpn-http')), / 200 /);
+    const f = lastFlow('/vpn-http');
+    assert.ok(f, 'el HTTP plano debería verse');
+    assert.strictEqual(f.app.name, 'Ejemplo Flútter');
+    assert.strictEqual(f.app.device, 'Pixel 9 · Android 16');
+    assert.strictEqual(f.app.source, 'android-vpn');
+    // SSL Proxying por paquete: 127.0.0.1 no está en sslHosts, se descifra por la app
+    proxy.updateSettings({ sslApps: ['com.ejemplo.flutter'] });
+    const tlsReq = `GET /vpn-tls HTTP/1.1\r\nHost: 127.0.0.1:${sp}\r\nConnection: close\r\n\r\n`;
+    assert.match(await viaVpn(`127.0.0.1:${sp}`, '', tlsReq, 'localhost'), / 200 /);
+    proxy.updateSettings({ sslApps: [] });
+    assert.strictEqual(lastFlow('/vpn-tls').app.name, 'Ejemplo Flútter');
+    // Sin SSL Proxying para esa app/host: Proxyboy le indica a la VPN que salga directo
+    const direct = await new Promise((resolve, reject) => {
+      const s = net.connect(port, '127.0.0.1', () => s.write(`CONNECT 127.0.0.1:${sp} HTTP/1.1\r\nHost: 127.0.0.1:${sp}\r\n`
+        + 'X-Proxyboy-App: com.ejemplo.flutter\r\nX-Proxyboy-Direct-Ok: 1\r\n\r\n'));
+      let out = '';
+      s.on('data', (c) => { out += c; });
+      s.on('end', () => resolve(out));
+      s.on('error', reject);
+    });
+    assert.match(direct, /^HTTP\/1\.1 204 Direct\r\nX-Proxyboy-Direct: 1/);
+    assert.ok(flows().find((f) => f.tags.includes('direct') && f.app && f.app.bundleId === 'com.ejemplo.flutter'));
+  });
+
   await check('Exportar HAR', async () => {
     const har = proxy.toHAR();
     assert.ok(har.log.entries.length >= 10);

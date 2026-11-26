@@ -11,6 +11,8 @@ const android = require('./android');
 
 // Dispositivos Android a los que les pusimos el proxy: se lo sacamos al salir para no dejarlos sin internet
 const androidOwned = new Set();
+// Dispositivos con la app Proxyboy VPN activa: la apagamos al salir
+const androidVpnOwned = new Set();
 
 let win;
 let proxy;
@@ -284,6 +286,17 @@ function registerIPC() {
     await android.clearProxy(serial, proxy.port);
     androidOwned.delete(serial);
   });
+  ipcMain.handle('android:vpn-start', async (_e, serial, deviceName) => {
+    const r = await android.startVpn(serial, proxy.port, ca.caCertPath, deviceName);
+    androidVpnOwned.add(serial);
+    settings.androidWithCert = [...new Set([...(settings.androidWithCert || []), serial])];
+    saveSettings();
+    return r;
+  });
+  ipcMain.handle('android:vpn-stop', async (_e, serial) => {
+    await android.stopVpn(serial, proxy.port);
+    androidVpnOwned.delete(serial);
+  });
 
   // Íconos de apps: PNG del bundle (apps del simulador iOS) o ícono del sistema (apps de macOS / .exe de Windows)
   const iconCache = new Map();
@@ -349,7 +362,10 @@ app.whenReady().then(async () => {
   }
   // Emuladores que quedaron apuntando a Proxyboy de una sesión anterior: los restauramos al salir
   try {
-    for (const d of (await android.listDevices(proxy.port)) || []) if (d.usingProxyboy) androidOwned.add(d.serial);
+    for (const d of (await android.listDevices(proxy.port)) || []) {
+      if (d.usingProxyboy) androidOwned.add(d.serial);
+      if (d.vpnActive) androidVpnOwned.add(d.serial);
+    }
   } catch { /* sin adb */ }
   registerIPC();
   buildMenu();
@@ -359,12 +375,15 @@ app.whenReady().then(async () => {
 
 let quitting = false;
 app.on('before-quit', async (e) => {
-  if (quitting || (!systemProxyOwned && !androidOwned.size)) return;
+  if (quitting || (!systemProxyOwned && !androidOwned.size && !androidVpnOwned.size)) return;
   // Restauramos el proxy del sistema y el de los dispositivos Android para no dejarlos sin internet
   e.preventDefault();
   quitting = true;
   if (systemProxyOwned) { try { await system.disableSystemProxy(); } catch { /* ignorar */ } }
-  await Promise.all([...androidOwned].map((serial) => android.clearProxy(serial, proxy.port).catch(() => {})));
+  await Promise.all([
+    ...[...androidOwned].map((serial) => android.clearProxy(serial, proxy.port).catch(() => {})),
+    ...[...androidVpnOwned].map((serial) => android.stopVpn(serial, proxy.port).catch(() => {})),
+  ]);
   app.quit();
 });
 

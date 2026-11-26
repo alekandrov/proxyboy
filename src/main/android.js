@@ -5,8 +5,13 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
+const forge = require('node-forge');
 
 const DEVICE_CERT_PATH = '/sdcard/Download/proxyboy-ca.crt';
+// App "Proxyboy VPN" (android-vpn/): captura todo el tráfico del dispositivo, también el de apps que ignoran el proxy (Flutter, React Native)
+const VPN_PKG = 'com.proxyboy.vpn';
+const VPN_APK = path.join(__dirname, 'assets', 'proxyboy-vpn.apk');
 
 function run(cmd, args, timeout = 15000) {
   return new Promise((resolve, reject) => {
@@ -58,15 +63,18 @@ async function listDevices(proxyPort) {
     const model = (/model:(\S+)/.exec(rest) || [])[1];
     const d = { serial, state, emulator: isEmulator(serial), name: model ? model.replace(/_/g, ' ') : serial };
     if (state === 'device') {
-      const [avd, release, proxy] = await Promise.all([
+      const [avd, release, proxy, vpn] = await Promise.all([
         d.emulator ? adb(serial, 'emu', 'avd', 'name').then((s) => s.split(/\r?\n/)[0].trim()).catch(() => '') : '',
         adb(serial, 'shell', 'getprop', 'ro.build.version.release').then((s) => s.trim()).catch(() => ''),
         adb(serial, 'shell', 'settings', 'get', 'global', 'http_proxy').then((s) => s.trim()).catch(() => ''),
+        vpnStatus(serial),
       ]);
       if (avd && avd !== 'OK') d.name = avd.replace(/_/g, ' ');
       d.android = release;
       d.proxy = proxy === 'null' || proxy === ':0' ? '' : proxy;
       d.usingProxyboy = !!proxyPort && d.proxy === proxyAddress(d, proxyPort);
+      d.vpnInstalled = vpn.installed;
+      d.vpnActive = vpn.active;
     }
     devices.push(d);
   }
@@ -93,4 +101,98 @@ async function clearProxy(serial, port) {
   if (!isEmulator(serial) && port) await adb(serial, 'reverse', '--remove', `tcp:${port}`).catch(() => {});
 }
 
-module.exports = { findAdb, listDevices, setup, clearProxy, DEVICE_CERT_PATH };
+// ---------- Proxyboy VPN ----------
+async function vpnStatus(serial) {
+  try {
+    const out = await adb(serial, 'shell', `pm path ${VPN_PKG}; dumpsys activity services ${VPN_PKG}/.ProxyboyVpnService | grep -c ServiceRecord`);
+    return { installed: out.includes('package:'), active: /^[1-9]/m.test(out) };
+  } catch {
+    return { installed: false, active: false };
+  }
+}
+
+// Comillas para `adb shell` (el dispositivo vuelve a interpretar la línea con sh)
+const shQuote = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+
+async function installVpn(serial) {
+  // El APK puede estar dentro del .asar: adb necesita un archivo real
+  const tmpApk = path.join(os.tmpdir(), 'proxyboy-vpn.apk');
+  fs.writeFileSync(tmpApk, fs.readFileSync(VPN_APK));
+  try {
+    await run(findAdb(), ['-s', serial, 'install', '-r', tmpApk], 120000);
+  } catch (e) {
+    // Firmada con otra clave (ej. una build vieja): desinstalamos y reinstalamos
+    if (!/INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match/i.test(e.message)) throw e;
+    await adb(serial, 'uninstall', VPN_PKG).catch(() => {});
+    await run(findAdb(), ['-s', serial, 'install', tmpApk], 120000);
+  }
+}
+
+// ---------- Certificado en el almacén de usuario (emuladores con root) ----------
+// Nombre de archivo que usa Android para los certificados: hash "old" de OpenSSL del subject (MD5, little-endian)
+function androidCertName(pem) {
+  const tbs = forge.asn1.fromDer(forge.pem.decode(pem)[0].body).value[0];
+  const off = tbs.value[0].tagClass === forge.asn1.Class.CONTEXT_SPECIFIC ? 1 : 0; // [0] version
+  const subject = Buffer.from(forge.asn1.toDer(tbs.value[off + 4]).getBytes(), 'binary');
+  return crypto.createHash('md5').update(subject).digest().readUInt32LE(0).toString(16).padStart(8, '0');
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// adbd como root: solo en emuladores con imagen "Google APIs" (las "Google Play" no lo permiten)
+async function ensureRoot(serial) {
+  const isRoot = () => adb(serial, 'shell', 'id', '-u').then((s) => s.trim() === '0').catch(() => false);
+  if (await isRoot()) return true;
+  await adb(serial, 'root').catch(() => {});
+  // adbd se reinicia: esperamos a que vuelva
+  for (let i = 0; i < 20; i++) {
+    await sleep(500);
+    if (await isRoot()) return true;
+  }
+  return false;
+}
+
+// Instala la CA como certificado de usuario sin pasar por Ajustes. Las apps debug que confían en CAs de usuario
+// (network_security_config con <certificates src="user"/>) y Chrome la aceptan. Devuelve false si no hay root.
+async function installUserCert(serial, certPath) {
+  if (!isEmulator(serial) || !(await ensureRoot(serial))) return false;
+  const name = androidCertName(fs.readFileSync(certPath, 'utf8'));
+  const tmp = '/data/local/tmp/proxyboy-ca.pem';
+  const dir = '/data/misc/user/0/cacerts-added';
+  await adb(serial, 'push', certPath, tmp);
+  // Si ya hay otro certificado con el mismo hash usamos el siguiente sufijo (.1, .2…)
+  await adb(serial, 'shell', `mkdir -p ${dir} && chown system:system ${dir} && chmod 755 ${dir} && `
+    + `for n in 0 1 2 3 4 5 6 7 8 9; do f=${dir}/${name}.$n; `
+    + `if [ ! -e $f ] || cmp -s ${tmp} $f; then cp ${tmp} $f && chown system:system $f && chmod 644 $f; break; fi; done; `
+    + `restorecon -R ${dir}; rm -f ${tmp}`);
+  return true;
+}
+
+// Instala (o actualiza) la app, le da el permiso de VPN sin diálogo y la conecta a Proxyboy.
+// En emuladores con root también instala el certificado de Proxyboy.
+async function startVpn(serial, port, certPath, deviceName) {
+  const device = { serial, emulator: isEmulator(serial) };
+  if (!device.emulator) await adb(serial, 'reverse', `tcp:${port}`, `tcp:${port}`);
+  await installVpn(serial);
+  await adb(serial, 'shell', 'appops', 'set', VPN_PKG, 'ACTIVATE_VPN', 'allow').catch(() => {});
+  let certInstalled = false;
+  if (certPath) {
+    certInstalled = await installUserCert(serial, certPath).catch(() => false);
+    // Sin root: queda en Descargas para instalarlo desde Ajustes
+    if (!certInstalled) await adb(serial, 'push', certPath, DEVICE_CERT_PATH).catch(() => {});
+  }
+  const host = device.emulator ? '10.0.2.2' : '127.0.0.1';
+  await adb(serial, 'shell', `am start -n ${VPN_PKG}/.MainActivity --es host ${host} --ei port ${Number(port)}`
+    + `${deviceName ? ` --es device ${shQuote(deviceName)}` : ''} --ez connect true`);
+  return { proxy: `${host}:${port}`, certInstalled, certOnDevice: certInstalled ? null : DEVICE_CERT_PATH };
+}
+
+// Cerrar la app apaga la VPN y el dispositivo vuelve a su red normal
+async function stopVpn(serial, port) {
+  await adb(serial, 'shell', 'am', 'force-stop', VPN_PKG);
+  if (!isEmulator(serial) && port) await adb(serial, 'reverse', '--remove', `tcp:${port}`).catch(() => {});
+}
+
+module.exports = {
+  findAdb, listDevices, setup, clearProxy, startVpn, stopVpn, installUserCert, androidCertName, DEVICE_CERT_PATH,
+};
