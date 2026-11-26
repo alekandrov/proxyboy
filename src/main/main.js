@@ -320,6 +320,9 @@ app.whenReady().then(async () => {
   await startProxy(settings.port);
   if (settings.autoSystemProxy) {
     try { await system.enableSystemProxy(proxy.port); systemProxyOwned = true; } catch { /* el usuario puede cancelar */ }
+  } else if (await system.isSystemProxyEnabled(proxy.port)) {
+    // Quedó activo de una sesión anterior que se cerró mal: lo tomamos como nuestro para restaurarlo al salir
+    systemProxyOwned = true;
   }
   registerIPC();
   buildMenu();
@@ -336,6 +339,17 @@ app.on('before-quit', async (e) => {
   try { await system.disableSystemProxy(); } catch { /* ignorar */ }
   app.quit();
 });
+
+// Ctrl+C en la terminal, cerrar la terminal o `kill`: salimos ordenadamente para que before-quit
+// restaure el proxy del sistema (si no, el usuario queda sin internet apuntando a un proxy muerto)
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => {
+    if (quitting) return;
+    app.quit();
+    // Si algo traba el cierre, forzamos la salida después de restaurar (o intentar restaurar)
+    setTimeout(() => app.exit(0), 8000).unref();
+  });
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
