@@ -33,6 +33,31 @@ function rawHeadersToPairs(raw, { skipPseudo = true } = {}) {
   return pairs;
 }
 
+// Nombre de la operación GraphQL (operationName, o el nombre tras query/mutation/subscription)
+function graphqlName(flow) {
+  if (flow._gql !== undefined) return flow._gql;
+  let name = null;
+  try {
+    const u = new URL(flow.url);
+    name = u.searchParams.get('operationName');
+    const body = flow.request.body;
+    const ct = (pairsGet(flow.request.headers, 'content-type') || '').toLowerCase();
+    if (!name && body && body.length && body.length < 1024 * 1024 && (ct.includes('json') || ct.includes('graphql'))) {
+      const text = body.toString('utf8');
+      const fromQuery = (q) => (/\b(?:query|mutation|subscription)\s+([A-Za-z_]\w*)/.exec(q || '') || [])[1];
+      if (ct.includes('graphql')) name = fromQuery(text);
+      else {
+        const json = JSON.parse(text);
+        const ops = (Array.isArray(json) ? json : [json]).filter((o) => o && typeof o.query === 'string');
+        name = ops.map((o) => o.operationName || fromQuery(o.query)).filter(Boolean).join(', ') || null;
+      }
+    }
+  } catch { /* no es GraphQL */ }
+  // Solo cacheamos cuando ya tenemos el body completo
+  if (flow.state !== 'pending' || name) flow._gql = name;
+  return name;
+}
+
 function pairsGet(pairs, name) {
   name = name.toLowerCase();
   const p = (pairs || []).find(([k]) => k.toLowerCase() === name);
@@ -348,6 +373,8 @@ class ProxyServer extends EventEmitter {
         source: f.app.source, bundleId: f.app.bundleId, udid: f.app.udid,
       } : null,
       wsCount: f.ws ? f.ws.length : 0,
+      serverIp: f.serverIp || null,
+      graphql: f.method === 'CONNECT' ? null : graphqlName(f),
     };
   }
 
@@ -599,6 +626,7 @@ class ProxyServer extends EventEmitter {
 
     const [{ meta, stream }] = await Promise.all([responsePromise, clientReady]);
     flow.timings.responseStart = Date.now();
+    flow.serverIp = meta.serverIp;
     flow.response = {
       statusCode: meta.statusCode,
       statusMessage: meta.statusMessage,
@@ -830,6 +858,7 @@ Ajustes → General → Información → Ajustes de confianza de certificados.</
     flow.request.headers = rawHeadersToPairs(req.rawHeaders);
     flow.tags.push('tunnel');
     const upstream = net.connect(port, host, () => {
+      flow.serverIp = upstream.remoteAddress;
       clientSocket.write('HTTP/1.1 200 Connection Established\r\nProxy-Agent: Proxyboy\r\n\r\n');
       if (head && head.length) upstream.write(head);
       upstream.pipe(clientSocket);

@@ -9,6 +9,7 @@ Hecho con **Electron + Node.js**, sin servicios externos: todo corre en tu máqu
 - **SSL Proxying por dominio** con comodines (`*.uala.com.ar`) o para todo; el resto pasa como túnel sin descifrar.
 - **Inspector** de request/response lado a lado: headers, query, body (Pretty JSON / Raw / Hex / imágenes), cookies, raw y timing. Descomprime gzip, deflate, br y zstd.
 - **Apps**: cada request muestra qué app lo hizo, con su ícono (Chrome, Slack, curl…). Las apps del **simulador de iOS** aparecen con su nombre, ícono y dispositivo (ej. "Ualá-Stage · iPhone 17 Pro · iOS 26.2"). Los celulares conectados por Wi-Fi se identifican por User-Agent.
+- **Tabla configurable como Proxyman**: clic en una columna para ordenar (asc/desc), arrastrar para moverla, arrastrar el borde para cambiar el ancho (doble clic lo restablece) y clic derecho en el encabezado para elegir columnas (URL, Host, Path, Cliente, Code, Estado, Fecha, Hora, Duración, tamaños, SSL, Editado, IPs, Query GraphQL…). Se recuerda entre sesiones.
 - **Sidebar** con Apps (expandibles por dominio), dominios, fijados, filtros por tipo (JSON, imágenes, errores…) y búsqueda (`-texto` excluye).
 - **Repetir** y **Editar y repetir** (doble clic), **Nuevo request** (⌘/Ctrl+N).
 - **Copiar como cURL**, copiar URL/body, **exportar HAR**.

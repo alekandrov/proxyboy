@@ -101,7 +101,7 @@ body.mac #toolbar .drag-spacer { width: 70px; }
 #table { flex: 1; display: flex; flex-direction: column; min-height: 80px; position: relative; }
 .row { display: flex; height: 22px; align-items: center; white-space: nowrap; }
 .row .c { padding: 0 6px; overflow: hidden; text-overflow: ellipsis; }
-.thead { background: var(--bg-2); border-bottom: 1px solid var(--border); font-weight: 600; color: var(--muted); height: 24px; padding-right: 12px; }
+.thead { background: var(--bg-2); border-bottom: 1px solid var(--border); font-weight: 600; color: var(--muted); height: 24px; }
 .c.id { width: 52px; text-align: right; color: var(--muted); }
 .c.status { width: 58px; }
 .c.method { width: 70px; font-weight: 600; }
@@ -110,7 +110,7 @@ body.mac #toolbar .drag-spacer { width: 70px; }
 .c.type { width: 110px; color: var(--muted); }
 .c.dur { width: 70px; text-align: right; }
 .c.size { width: 76px; text-align: right; }
-#rows-viewport { flex: 1; overflow-y: auto; overflow-x: hidden; outline: none; }
+#rows-viewport { flex: 1; overflow: auto; outline: none; }
 #rows-spacer { position: relative; }
 #rows { position: absolute; left: 0; right: 0; top: 0; }
 #rows .row { font-family: var(--mono); font-size: 11.5px; cursor: default; }
@@ -264,3 +264,29 @@ code.box { display: block; padding: 8px; background: var(--bg-2); border-radius:
 .c.type { width: 90px; }
 .c.host { width: 220px; }
 .sim-badge { font-size: 9px; padding: 0 4px; border-radius: 3px; background: var(--bg-3); color: var(--muted); flex: none; }
+
+/* ---------- Columnas configurables ---------- */
+#thead { position: sticky; top: 0; z-index: 3; min-width: var(--tw, 100%); }
+#rows-spacer { min-width: var(--tw, 100%); }
+#rows .row { min-width: var(--tw, 100%); }
+#rows .c { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c.a-right { text-align: right; justify-content: flex-end; }
+.c.a-center { text-align: center; justify-content: center; }
+.hc { position: relative; display: flex; align-items: center; gap: 3px; height: 100%; border-right: 1px solid var(--border); cursor: default; user-select: none; }
+.hc:hover { background: var(--bg-3); color: var(--fg); }
+.hc.sorted { color: var(--fg); }
+.hc-label { overflow: hidden; text-overflow: ellipsis; }
+.sort-arrow { font-size: 8px; color: var(--accent); flex: none; }
+.col-resize { position: absolute; right: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 2; }
+.col-resize:hover, body.col-resizing .col-resize { background: linear-gradient(to right, transparent 3px, var(--accent) 3px, var(--accent) 5px, transparent 5px); }
+body.col-resizing, body.col-resizing * { cursor: col-resize !important; }
+.hc.dragging { opacity: .4; }
+.hc.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
+.hc.drop-after { box-shadow: inset -2px 0 0 var(--accent); }
+.c.k-id { color: var(--muted); }
+.c.k-method { font-weight: 600; }
+.c.k-type, .c.k-serverIp, .c.k-clientIp, .c.k-date, .c.k-time, .c.k-timeComplete { color: var(--muted); }
+.c.k-client { display: flex; align-items: center; gap: 5px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+.c.k-client .app-icon { width: 15px; height: 15px; border-radius: 3px; }
+.c.k-client span { overflow: hidden; text-overflow: ellipsis; }
+.state-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: currentColor; vertical-align: middle; }

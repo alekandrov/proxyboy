@@ -57,12 +57,10 @@
 
       <div id="hint-bar" hidden></div>
       <div id="table">
-        <div class="thead row">
-          <div class="c id">#</div><div class="c status">Status</div><div class="c method">Método</div>
-          <div class="c host">Host</div><div class="c path">Path</div><div class="c client">Cliente</div><div class="c type">Tipo</div>
-          <div class="c dur">Tiempo</div><div class="c size">Tamaño</div>
+        <div id="rows-viewport" tabindex="0">
+          <div id="thead" class="thead row"></div>
+          <div id="rows-spacer"><div id="rows"></div></div>
         </div>
-        <div id="rows-viewport" tabindex="0"><div id="rows-spacer"><div id="rows"></div></div></div>
         <div id="empty" class="empty">
           <h2>Esperando tráfico…</h2>
           <p>Configurá tu app, navegador o dispositivo para usar el proxy <b id="empty-addr"></b>,<br>
@@ -120,6 +118,7 @@
   <div id="toast" hidden></div>
 
   <script src="util.js"></script>
+  <script src="columns.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

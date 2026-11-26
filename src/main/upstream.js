@@ -162,6 +162,7 @@ class Upstream {
       res.on('end', () => {
         for (let i = 0; i < res.rawTrailers.length; i += 2) meta.trailers.push([res.rawTrailers[i], res.rawTrailers[i + 1]]);
       });
+      meta.serverIp = res.socket && res.socket.remoteAddress;
       ee.emit('response', meta, res);
     });
     req.on('error', (e) => ee.emit('error', e));
@@ -191,6 +192,7 @@ class Upstream {
         trailers: [],
       };
       stream.on('trailers', (t) => { meta.trailers = h2HeadersToPairs(t); });
+      try { meta.serverIp = session.socket && session.socket.remoteAddress; } catch { /* sesión cerrada */ }
       ee.emit('response', meta, stream);
     });
     stream.on('error', (e) => ee.emit('error', e));

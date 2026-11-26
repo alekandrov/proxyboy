@@ -1,5 +1,6 @@
 /* global esc, fmtSize, fmtDur, statusClass, shortType, b64ToBytes, bytesToText, looksBinary, hexdump,
-   highlightJSON, headerGet, toCurl, parseCookies, decodeProtobuf, splitGrpcFrames, diffLines */
+   highlightJSON, headerGet, toCurl, parseCookies, decodeProtobuf, splitGrpcFrames, diffLines,
+   HEAD_H, loadColumns, renderHeader, bindHeader, rowHTML, sortView, followsTail */
 const api = window.proxyboy;
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -34,6 +35,9 @@ const S = {
 // ---------------- Inicio ----------------
 async function init() {
   if (navigator.platform.toLowerCase().includes('mac')) document.body.classList.add('mac');
+  loadColumns();
+  renderHeader();
+  bindHeader();
   S.app = await api.state();
   renderAppState();
   for (const f of await api.allFlows()) addFlow(f);
@@ -121,7 +125,7 @@ function matchHost(f) {
 }
 
 function computeView() {
-  S.view = S.flows.filter((f) => matchHost(f) && matchChip(f) && matchQuery(f));
+  S.view = sortView(S.flows.filter((f) => matchHost(f) && matchChip(f) && matchQuery(f)));
 }
 
 // ---------------- Render ----------------
@@ -135,7 +139,7 @@ function refresh() {
     const atBottom = vp.scrollTop + vp.clientHeight >= vp.scrollHeight - ROW_H * 2;
     computeView();
     $('#rows-spacer').style.height = `${S.view.length * ROW_H}px`;
-    if (atBottom) vp.scrollTop = vp.scrollHeight;
+    if (atBottom && followsTail()) vp.scrollTop = vp.scrollHeight;
     renderRows();
     renderSidebar();
     $('#empty').hidden = S.flows.length > 0;
@@ -187,24 +191,7 @@ function renderRows() {
   const rows = $('#rows');
   rows.style.top = `${start * ROW_H}px`;
   let html = '';
-  for (let i = start; i < end; i++) {
-    const f = S.view[i];
-    const sc = statusClass(f);
-    const status = f.state === 'failed' ? 'ERR' : f.state === 'paused' ? '⏸' : (f.status || '…');
-    const tags = f.tags.filter((t) => t !== 'websocket' && t !== 'h2').map((t) => `<span class="tag ${esc(t)}">${esc(t)}</span>`).join('');
-    const lock = f.scheme === 'https' || f.scheme === 'wss' ? '🔒 ' : '';
-    html += `<div class="row${S.selected.has(f.id) ? ' selected' : ''}${f.method === 'CONNECT' ? ' dim' : ''}" data-id="${f.id}">
-      <div class="c id">${f.id}</div>
-      <div class="c status ${sc}">${esc(status)}</div>
-      <div class="c method">${esc(f.method)}</div>
-      <div class="c host" title="${esc(f.host)}">${lock}${esc(f.host)}</div>
-      <div class="c path" title="${esc(f.url)}">${esc(f.path || '')}${tags}</div>
-      <div class="c client" title="${f.app ? esc(`${f.app.name}${appSubtitle(f.app) ? ` — ${appSubtitle(f.app)}` : ''}`) : ''}">${f.app ? `${appIconHTML(f.app)}<span>${esc(f.app.name)}</span>` : ''}</div>
-      <div class="c type">${esc(shortType(f.contentType, f))}${f.wsCount ? ` · ${f.wsCount} msg` : ''}</div>
-      <div class="c dur">${fmtDur(f.duration)}</div>
-      <div class="c size">${f.resSize ? fmtSize(f.resSize) : ''}</div>
-    </div>`;
-  }
+  for (let i = start; i < end; i++) html += rowHTML(S.view[i]);
   rows.innerHTML = html;
 }
 
@@ -1030,7 +1017,7 @@ function openRules(type = 'mapLocalRules', prefill) {
   };
 
   openModal('Reglas', '<div id="rules-root" style="display:flex;flex-direction:column;gap:8px"></div>', [
-    { label: 'Cancelar' },
+    { label: 'Cerrar' },
     {
       label: 'Guardar', cls: 'primary', run: async () => {
         try {
@@ -1038,7 +1025,8 @@ function openRules(type = 'mapLocalRules', prefill) {
         } catch { toast('Map Remote: el destino debe ser una URL válida (ej. http://localhost:8080)'); return true; }
         S.app = await api.updateSettings(lists);
         toast('Reglas guardadas');
-        return false;
+        draw(); // refresca los contadores de las pestañas
+        return true; // la ventana queda abierta para seguir editando
       },
     },
   ], { wide: true });
@@ -1225,9 +1213,10 @@ function bindUI() {
       if (S.view[i]) {
         select(S.view[i].id);
         const vp = $('#rows-viewport');
+        // El encabezado es sticky: la fila i empieza en HEAD_H + i * ROW_H dentro del área con scroll
         const y = i * ROW_H;
         if (y < vp.scrollTop) vp.scrollTop = y;
-        else if (y + ROW_H > vp.scrollTop + vp.clientHeight) vp.scrollTop = y + ROW_H - vp.clientHeight;
+        else if (HEAD_H + y + ROW_H > vp.scrollTop + vp.clientHeight) vp.scrollTop = HEAD_H + y + ROW_H - vp.clientHeight;
       }
     } else if (e.key === 'Backspace' || e.key === 'Delete') {
       deleteSelected();
