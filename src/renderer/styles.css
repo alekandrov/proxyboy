@@ -192,3 +192,46 @@ pre.code { margin: 0; padding: 8px 10px; font-family: var(--mono); font-size: 11
 code.box { display: block; padding: 8px; background: var(--bg-2); border-radius: 6px; font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
 
 #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 7px 14px; border-radius: 7px; z-index: 60; max-width: 80vw; }
+
+/* Secciones / badges */
+.sub-title { padding: 8px 10px 4px; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.badge { background: var(--accent); color: #fff; border-radius: 8px; padding: 0 6px; font-size: 10px; font-weight: 600; }
+.tag.map-remote { background: #0891b2; color: #fff; } .tag.script { background: #ca8a04; color: #fff; }
+.tag.script-error { background: var(--server-err); color: #fff; }
+.tag.bp-request, .tag.bp-response { background: #f59e0b; color: #fff; }
+
+/* Modal ancho + reglas */
+#modal.wide { width: min(1040px, 95vw); }
+.rule-tabs { border-bottom: 1px solid var(--border); padding-bottom: 6px; flex-wrap: wrap; }
+.rule-tabs button { padding: 4px 10px; }
+.rule-list { max-height: 180px; }
+.rule { cursor: default; }
+.rule-editor { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--bg-2); }
+.code-editor { min-height: 280px; tab-size: 2; }
+
+/* Breakpoint (encima de cualquier otro modal) */
+#bp-backdrop { position: fixed; inset: 0; background: #0007; z-index: 45; display: flex; align-items: center; justify-content: center; }
+#bp-modal { background: var(--bg); border: 2px solid #f59e0b; border-radius: 10px; width: min(860px, 94vw); max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px #0008; user-select: text; }
+#bp-modal .m-head { padding: 12px 16px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+#bp-modal .m-body { padding: 14px 16px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+#bp-modal .m-foot { padding: 10px 16px; border-top: 1px solid var(--border); display: flex; gap: 8px; align-items: center; }
+#bp-modal label { display: flex; flex-direction: column; gap: 4px; font-weight: 500; }
+#bp-modal .row2 { display: flex; gap: 8px; align-items: flex-end; }
+#bp-modal .row2 > * { flex: 1; }
+#bp-modal .row2 > .narrow { flex: none; width: 110px; }
+#bp-modal .hint { color: var(--muted); font-size: 11px; font-weight: normal; }
+
+/* WebSocket */
+.ws-msg { border-bottom: 1px solid var(--border); }
+.ws-head { display: flex; gap: 10px; padding: 4px 10px; font-size: 11px; align-items: center; }
+.ws-msg.out .ws-dir { color: var(--accent); font-weight: 600; }
+.ws-msg.in .ws-dir { color: var(--ok); font-weight: 600; }
+.ws-msg pre.code { padding-top: 0; max-height: 300px; overflow: auto; }
+
+/* Diff */
+.diff { font-family: var(--mono); font-size: 11.5px; border: 1px solid var(--border); border-radius: 6px; max-height: 38vh; overflow: auto; }
+.dl { white-space: pre-wrap; word-break: break-all; padding: 0 8px; }
+.dl .dg { display: inline-block; width: 14px; color: var(--muted); user-select: none; }
+.dl.dadd { background: #1f9d5526; } .dl.ddel { background: #e11d4826; }
+.diff-legend { display: flex; flex-direction: column; gap: 2px; font-family: var(--mono); font-size: 11.5px; }
+.diff-legend .ddel { color: var(--server-err); } .diff-legend .dadd { color: var(--ok); }

@@ -25,7 +25,7 @@ function statusClass(f) {
 }
 
 function shortType(ct, f) {
-  if (f.tags && f.tags.includes('websocket')) return 'websocket';
+  if (f.tags && f.tags.includes('websocket')) return 'ws';
   if (f.method === 'CONNECT') return 'tunnel';
   if (!ct) return '';
   const base = ct.split(';')[0].trim().toLowerCase();
@@ -123,4 +123,127 @@ function parseCookies(str) {
     const i = p.indexOf('=');
     return i < 0 ? [p, ''] : [p.slice(0, i), p.slice(i + 1)];
   });
+}
+
+// ---------------- Protobuf / gRPC (sin esquema) ----------------
+// Decodifica un mensaje protobuf a un objeto { "nroCampo": valor }. Los campos repetidos quedan como arrays.
+function decodeProtobuf(bytes, depth = 0) {
+  let i = 0;
+  const out = {};
+  const readVarint = () => {
+    let result = 0n;
+    let shift = 0n;
+    for (;;) {
+      if (i >= bytes.length) throw new Error('varint truncado');
+      const b = bytes[i++];
+      result |= BigInt(b & 0x7f) << shift;
+      if (!(b & 0x80)) break;
+      shift += 7n;
+      if (shift > 70n) throw new Error('varint inválido');
+    }
+    return result;
+  };
+  const num = (big) => (big <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(big) : big.toString());
+  const add = (k, v) => {
+    if (out[k] === undefined) out[k] = v;
+    else if (Array.isArray(out[k]) && out[k].__repeated) out[k].push(v);
+    else { const arr = [out[k], v]; arr.__repeated = true; out[k] = arr; }
+  };
+  while (i < bytes.length) {
+    const key = readVarint();
+    const field = Number(key >> 3n);
+    const wire = Number(key & 7n);
+    if (field <= 0 || field > 536870911) throw new Error('campo inválido');
+    if (wire === 0) {
+      add(field, num(readVarint()));
+    } else if (wire === 1) {
+      if (i + 8 > bytes.length) throw new Error('fixed64 truncado');
+      const dv = new DataView(bytes.buffer, bytes.byteOffset + i, 8);
+      const asInt = dv.getBigUint64(0, true);
+      const asDouble = dv.getFloat64(0, true);
+      add(field, Number.isFinite(asDouble) && Math.abs(asDouble) > 1e-300 && Math.abs(asDouble) < 1e300 && !Number.isInteger(asDouble) ? asDouble : num(asInt));
+      i += 8;
+    } else if (wire === 2) {
+      const len = Number(readVarint());
+      if (i + len > bytes.length) throw new Error('longitud inválida');
+      const sub = bytes.subarray(i, i + len);
+      i += len;
+      add(field, decodeLengthDelimited(sub, depth));
+    } else if (wire === 5) {
+      if (i + 4 > bytes.length) throw new Error('fixed32 truncado');
+      const dv = new DataView(bytes.buffer, bytes.byteOffset + i, 4);
+      const f = dv.getFloat32(0, true);
+      add(field, Number.isFinite(f) && !Number.isInteger(f) && Math.abs(f) > 1e-30 ? Number(f.toPrecision(7)) : dv.getUint32(0, true));
+      i += 4;
+    } else {
+      throw new Error(`wire type ${wire} no soportado`);
+    }
+  }
+  for (const k of Object.keys(out)) if (Array.isArray(out[k])) delete out[k].__repeated;
+  return out;
+}
+
+function decodeLengthDelimited(sub, depth) {
+  if (!sub.length) return '';
+  // ¿Es texto legible?
+  const text = new TextDecoder('utf-8', { fatal: false }).decode(sub);
+  const printable = !text.includes('�') && /^[\P{Cc}\n\r\t]*$/u.test(text);
+  if (depth < 12) {
+    try {
+      const nested = decodeProtobuf(sub, depth + 1);
+      if (Object.keys(nested).length && !(printable && text.length < 4)) return nested;
+    } catch { /* no es un mensaje anidado */ }
+  }
+  if (printable) return text;
+  return `0x${[...sub].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+}
+
+// Separa los frames de gRPC / gRPC-Web: [flag(1) | longitud(4) | mensaje]
+function splitGrpcFrames(bytes) {
+  const frames = [];
+  let i = 0;
+  while (i + 5 <= bytes.length) {
+    const flag = bytes[i];
+    const len = (bytes[i + 1] << 24 >>> 0) + (bytes[i + 2] << 16) + (bytes[i + 3] << 8) + bytes[i + 4];
+    if (i + 5 + len > bytes.length) return null;
+    frames.push({ compressed: !!(flag & 1), trailers: !!(flag & 0x80), data: bytes.subarray(i + 5, i + 5 + len) });
+    i += 5 + len;
+  }
+  return i === bytes.length ? frames : null;
+}
+
+// ---------------- Diff por líneas (LCS) ----------------
+function diffLines(aText, bText) {
+  const a = aText.split('\n');
+  const b = bText.split('\n');
+  const n = a.length;
+  const m = b.length;
+  if (n * m > 6e6) {
+    // Demasiado grande para LCS: comparación línea a línea
+    const out = [];
+    for (let k = 0; k < Math.max(n, m); k++) {
+      if (a[k] === b[k]) out.push({ t: ' ', s: a[k] });
+      else {
+        if (k < n) out.push({ t: '-', s: a[k] });
+        if (k < m) out.push({ t: '+', s: b[k] });
+      }
+    }
+    return out;
+  }
+  const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let x = n - 1; x >= 0; x--) {
+    for (let y = m - 1; y >= 0; y--) {
+      dp[x][y] = a[x] === b[y] ? dp[x + 1][y + 1] + 1 : Math.max(dp[x + 1][y], dp[x][y + 1]);
+    }
+  }
+  const out = [];
+  let x = 0; let y = 0;
+  while (x < n && y < m) {
+    if (a[x] === b[y]) { out.push({ t: ' ', s: a[x] }); x++; y++; }
+    else if (dp[x + 1][y] >= dp[x][y + 1]) out.push({ t: '-', s: a[x++] });
+    else out.push({ t: '+', s: b[y++] });
+  }
+  while (x < n) out.push({ t: '-', s: a[x++] });
+  while (y < m) out.push({ t: '+', s: b[y++] });
+  return out;
 }

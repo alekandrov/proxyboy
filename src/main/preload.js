@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('proxyboy', {
   exportHAR: (ids) => ipcRenderer.invoke('har:export', ids),
   saveBody: (base64, name) => ipcRenderer.invoke('body:save', { base64, name }),
   copy: (text) => ipcRenderer.invoke('clipboard:write', text),
+  resolveBreakpoint: (bpId, decision) => ipcRenderer.invoke('breakpoint:resolve', bpId, decision),
+  onBreakpoint: (cb) => ipcRenderer.on('breakpoint', (_e, bp) => cb(bp)),
   onFlows: (cb) => ipcRenderer.on('flows', (_e, data) => cb(data)),
   onCommand: (cb) => ipcRenderer.on('command', (_e, cmd) => cb(cmd)),
 });

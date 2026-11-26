@@ -19,8 +19,12 @@ const defaults = {
   sslProxyAll: false,
   sslHosts: [],
   verifyUpstreamTLS: true,
+  http2: true,
   mapLocalRules: [],
+  mapRemoteRules: [],
   blockRules: [],
+  breakpointRules: [],
+  scriptRules: [],
   autoSystemProxy: false,
 };
 let settings = { ...defaults };
@@ -38,9 +42,35 @@ function applySettingsToProxy() {
     sslProxyAll: settings.sslProxyAll,
     sslHosts: settings.sslHosts,
     verifyUpstreamTLS: settings.verifyUpstreamTLS,
+    http2: settings.http2,
   });
-  proxy.mapLocalRules = settings.mapLocalRules;
-  proxy.blockRules = settings.blockRules;
+  proxy.setRules({
+    mapLocal: settings.mapLocalRules,
+    mapRemote: settings.mapRemoteRules,
+    block: settings.blockRules,
+    breakpoints: settings.breakpointRules,
+    scripts: settings.scriptRules,
+  });
+}
+
+// ---------------- Breakpoints ----------------
+// El proxy espera la decisión del usuario; la UI muestra un editor y responde por IPC.
+const pendingBreakpoints = new Map();
+let nextBreakpointId = 1;
+function handleBreakpoint(bp) {
+  if (!win || win.isDestroyed()) return Promise.resolve({ action: 'execute' });
+  return new Promise((resolve) => {
+    const bpId = nextBreakpointId++;
+    pendingBreakpoints.set(bpId, resolve);
+    win.webContents.send('breakpoint', { ...bp, bpId });
+    if (win.isMinimized()) win.restore();
+    win.show();
+    if (process.platform === 'darwin' && app.dock) app.dock.bounce('informational');
+  });
+}
+function releaseAllBreakpoints() {
+  for (const resolve of pendingBreakpoints.values()) resolve({ action: 'execute' });
+  pendingBreakpoints.clear();
 }
 
 async function startProxy(preferredPort) {
@@ -98,20 +128,24 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  // Modo de verificación: PROXYBOY_SCREENSHOT=archivo.png guarda una captura y cierra
-  if (process.env.PROXYBOY_SCREENSHOT) {
+  // Modo de verificación (desarrollo): PROXYBOY_STEPS='[{"js":"...","shot":"/ruta.png"}]'
+  // ejecuta cada paso en la UI, guarda capturas y cierra la app.
+  if (process.env.PROXYBOY_STEPS) {
     win.webContents.on('console-message', (_e, level, msg) => console.log('[renderer]', msg));
     setTimeout(async () => {
-      if (process.env.PROXYBOY_SELECT) {
-        await win.webContents.executeJavaScript(process.env.PROXYBOY_SELECT).catch((e) => console.log('select error', e));
-        await new Promise((r) => setTimeout(r, 800));
+      for (const step of JSON.parse(process.env.PROXYBOY_STEPS)) {
+        if (step.js) await win.webContents.executeJavaScript(step.js).catch((e) => console.log('step error', e));
+        await new Promise((r) => setTimeout(r, step.wait || 700));
+        if (step.shot) {
+          fs.writeFileSync(step.shot, (await win.webContents.capturePage()).toPNG());
+          console.log('screenshot saved', step.shot);
+        }
       }
-      const img = await win.webContents.capturePage();
-      fs.writeFileSync(process.env.PROXYBOY_SCREENSHOT, img.toPNG());
-      console.log('screenshot saved');
       app.exit(0);
     }, Number(process.env.PROXYBOY_DELAY || 6000));
   }
+  win.on('closed', () => { releaseAllBreakpoints(); win = null; });
+  win.webContents.on('did-start-navigation', releaseAllBreakpoints);
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -141,7 +175,10 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Proxy del sistema', accelerator: 'CmdOrCtrl+Shift+P', click: send('toggle-system-proxy') },
         { label: 'SSL Proxying…', click: send('settings') },
-        { label: 'Reglas (Map Local / Block)…', accelerator: 'CmdOrCtrl+Alt+L', click: send('rules') },
+        { label: 'Reglas…', accelerator: 'CmdOrCtrl+Alt+L', click: send('rules') },
+        { label: 'Breakpoints…', accelerator: 'CmdOrCtrl+Alt+B', click: send('rules:breakpointRules') },
+        { label: 'Scripts…', accelerator: 'CmdOrCtrl+Alt+I', click: send('rules:scriptRules') },
+        { label: 'Map Remote…', accelerator: 'CmdOrCtrl+Alt+R', click: send('rules:mapRemoteRules') },
         { label: 'Certificado…', click: send('certificate') },
       ],
     },
@@ -191,6 +228,12 @@ function registerIPC() {
   });
   ipcMain.handle('cert:reveal', () => shell.showItemInFolder(ca.caCertPath));
 
+  ipcMain.handle('breakpoint:resolve', (_e, bpId, decision) => {
+    const resolve = pendingBreakpoints.get(bpId);
+    if (resolve) { pendingBreakpoints.delete(bpId); resolve(decision); }
+  });
+  ipcMain.handle('breakpoint:pending', () => pendingBreakpoints.size);
+
   ipcMain.handle('request:send', (_e, req) => proxy.sendRequest(req));
 
   ipcMain.handle('har:export', async (_e, ids) => {
@@ -220,6 +263,7 @@ app.whenReady().then(async () => {
   applySettingsToProxy();
   proxy.on('flow', (f) => pending.added.push(f));
   proxy.on('flow-update', (f) => pending.updated.set(f.id, f));
+  proxy.onBreakpoint = handleBreakpoint;
   await startProxy(settings.port);
   if (settings.autoSystemProxy) {
     try { await system.enableSystemProxy(proxy.port); systemProxyOwned = true; } catch { /* el usuario puede cancelar */ }

@@ -1,6 +1,6 @@
 {
   "name": "proxyboy",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Proxy de debugging HTTP/HTTPS multiplataforma (estilo Proxyman)",
   "main": "src/main/main.js",
   "scripts": {

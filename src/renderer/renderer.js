@@ -1,5 +1,5 @@
 /* global esc, fmtSize, fmtDur, statusClass, shortType, b64ToBytes, bytesToText, looksBinary, hexdump,
-   highlightJSON, headerGet, toCurl, parseCookies */
+   highlightJSON, headerGet, toCurl, parseCookies, decodeProtobuf, splitGrpcFrames, diffLines */
 const api = window.proxyboy;
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -24,6 +24,7 @@ const S = {
   detail: null,
   app: null,
   recording: true,
+  bpQueue: [],
 };
 
 // ---------------- Inicio ----------------
@@ -46,6 +47,7 @@ async function init() {
     if (focusChanged) loadDetail(S.focusId, true);
   });
   api.onCommand(runCommand);
+  api.onBreakpoint((bp) => { S.bpQueue.push(bp); if (S.bpQueue.length === 1) showBreakpoint(); });
   bindUI();
 }
 
@@ -146,8 +148,8 @@ function renderRows() {
   for (let i = start; i < end; i++) {
     const f = S.view[i];
     const sc = statusClass(f);
-    const status = f.state === 'failed' ? 'ERR' : (f.status || '…');
-    const tags = f.tags.filter((t) => t !== 'websocket').map((t) => `<span class="tag ${esc(t)}">${esc(t)}</span>`).join('');
+    const status = f.state === 'failed' ? 'ERR' : f.state === 'paused' ? '⏸' : (f.status || '…');
+    const tags = f.tags.filter((t) => t !== 'websocket' && t !== 'h2').map((t) => `<span class="tag ${esc(t)}">${esc(t)}</span>`).join('');
     const lock = f.scheme === 'https' || f.scheme === 'wss' ? '🔒 ' : '';
     html += `<div class="row${S.selected.has(f.id) ? ' selected' : ''}${f.method === 'CONNECT' ? ' dim' : ''}" data-id="${f.id}">
       <div class="c id">${f.id}</div>
@@ -155,7 +157,7 @@ function renderRows() {
       <div class="c method">${esc(f.method)}</div>
       <div class="c host" title="${esc(f.host)}">${lock}${esc(f.host)}</div>
       <div class="c path" title="${esc(f.url)}">${esc(f.path || '')}${tags}</div>
-      <div class="c type">${esc(shortType(f.contentType, f))}</div>
+      <div class="c type">${esc(shortType(f.contentType, f))}${f.wsCount ? ` · ${f.wsCount} msg` : ''}</div>
       <div class="c dur">${fmtDur(f.duration)}</div>
       <div class="c size">${f.resSize ? fmtSize(f.resSize) : ''}</div>
     </div>`;
@@ -247,11 +249,12 @@ function renderResTab(d) {
   const r = d.response;
   if (!r) return `<div class="note">${d.error ? esc(d.error) : 'Esperando respuesta…'}</div>`;
   switch (S.resTab) {
-    case 'headers': return kvTable([[':status', `${r.statusCode} ${r.statusMessage || ''}`], ...r.headers]);
+    case 'headers': return kvTable([[':status', `${r.statusCode} ${r.statusMessage || ''}`], [':version', `HTTP/${r.httpVersion || '1.1'}`], ...r.headers])
+      + (r.trailers && r.trailers.length ? `<div class="sub-title">Trailers</div>${kvTable(r.trailers)}` : '');
     case 'body':
       if (d.method === 'CONNECT') return `<div class="note">Túnel HTTPS sin interceptar (${fmtSize(d.reqSize)} ↑ / ${fmtSize(d.resSize)} ↓).<br><br>
         Para ver el contenido, habilitá SSL Proxying para <b>${esc(d.host)}</b> (clic derecho → "Habilitar SSL Proxying").</div>`;
-      if (d.tags.includes('websocket')) return '<div class="note">Conexión WebSocket (los frames se reenvían sin decodificar).</div>';
+      if (d.tags.includes('websocket')) return renderWebSocket(d);
       return renderBody(r.body, headerGet(r.headers, 'content-type'), 'res');
     case 'cookies': return kvTable(r.headers.filter(([k]) => k.toLowerCase() === 'set-cookie'), 'Sin Set-Cookie');
     case 'raw': return `<pre class="code">${esc(rawResponse(r))}</pre>`;
@@ -286,7 +289,10 @@ function renderTiming(d) {
     <tr><td class="k">Total</td><td>${fmtDur(total)}${bar(total)}</td></tr>
     <tr><td class="k">Cliente</td><td>${esc(d.client || '')}</td></tr>
     <tr><td class="k">Tamaño request</td><td>${fmtSize(d.reqSize)}</td></tr>
-    <tr><td class="k">Tamaño response</td><td>${fmtSize(d.resSize)} (en el cable)</td></tr></table>`;
+    <tr><td class="k">Tamaño response</td><td>${fmtSize(d.resSize)} (en el cable)</td></tr>
+    <tr><td class="k">Protocolo</td><td>Cliente HTTP/${esc(d.httpVersion || '1.1')} · Servidor HTTP/${esc((d.response && d.response.httpVersion) || '—')}</td></tr>
+    ${d.originalUrl ? `<tr><td class="k">URL original</td><td>${esc(d.originalUrl)}</td></tr>` : ''}</table>
+    ${d.notes && d.notes.length ? `<div class="sub-title">Notas / logs de scripts</div><pre class="code">${esc(d.notes.map((n) => `${new Date(n.time).toLocaleTimeString()}  ${n.text}`).join('\n'))}</pre>` : ''}`;
 }
 
 function renderBody(body, contentType, which) {
@@ -303,6 +309,8 @@ function renderBody(body, contentType, which) {
   let content;
   if (S.bodyMode === 'hex') {
     content = `<pre class="code">${esc(hexdump(bytes))}</pre>`;
+  } else if (S.bodyMode === 'pretty' && /grpc|protobuf/.test(ct)) {
+    content = renderProtobuf(bytes, ct);
   } else if (S.bodyMode === 'pretty' && ct.startsWith('image/')) {
     content = `<img class="body-img" src="data:${esc(ct.split(';')[0])};base64,${body.base64}">`;
   } else if (looksBinary(bytes)) {
@@ -313,6 +321,55 @@ function renderBody(body, contentType, which) {
     else content = `<pre class="code">${esc(text)}</pre>`;
   }
   return toolbar + content;
+}
+
+function renderProtobuf(bytes, ct) {
+  const isGrpc = ct.includes('grpc');
+  const frames = isGrpc ? splitGrpcFrames(bytes) : null;
+  const parts = [];
+  const show = (label, data) => {
+    try {
+      parts.push(`<div class="sub-title">${esc(label)}</div><pre class="code">${highlightJSON(JSON.stringify(decodeProtobuf(data), null, 2))}</pre>`);
+    } catch (e) {
+      parts.push(`<div class="sub-title">${esc(label)}</div><div class="note">No se pudo decodificar como Protobuf (${esc(e.message)}).</div><pre class="code">${esc(hexdump(data, 4096))}</pre>`);
+    }
+  };
+  if (frames) {
+    frames.forEach((f, i) => {
+      if (f.trailers) parts.push(`<div class="sub-title">Trailers gRPC-Web</div><pre class="code">${esc(bytesToText(f.data))}</pre>`);
+      else if (f.compressed) parts.push(`<div class="sub-title">Mensaje #${i + 1}</div><div class="note">Mensaje comprimido (grpc-encoding): no se decodifica.</div>`);
+      else show(`Mensaje #${i + 1} · ${fmtSize(f.data.length)}`, f.data);
+    });
+    if (!frames.length) parts.push('<div class="note">Sin mensajes</div>');
+  } else {
+    show('Protobuf (sin esquema: las claves son números de campo)', bytes);
+  }
+  return parts.join('');
+}
+
+function renderWebSocket(d) {
+  const msgs = d.ws || [];
+  if (!msgs.length) return '<div class="note">Conexión WebSocket abierta, sin mensajes todavía.</div>';
+  const shown = msgs.slice(-500);
+  const rows = shown.map((m) => {
+    const bytes = b64ToBytes(m.payload);
+    let body;
+    if (m.opcode === 'text') {
+      const text = bytesToText(bytes);
+      let pretty = null;
+      if (/^\s*[[{]/.test(text)) { try { pretty = highlightJSON(JSON.stringify(JSON.parse(text), null, 2)); } catch { /* texto */ } }
+      body = pretty || esc(text);
+    } else if (m.opcode === 'close') {
+      body = bytes.length >= 2 ? `código ${(bytes[0] << 8) + bytes[1]} ${esc(bytesToText(bytes.subarray(2)))}` : '';
+    } else {
+      body = esc(hexdump(bytes, 1024));
+    }
+    return `<div class="ws-msg ${m.dir}"><div class="ws-head"><span class="ws-dir">${m.dir === 'out' ? '↑ enviado' : '↓ recibido'}</span>
+      <span>${esc(m.opcode)}</span><span class="muted">${fmtSize(m.size)}${m.truncated ? ' · truncado' : ''}</span>
+      <span class="tb-flex"></span><span class="muted">${new Date(m.time).toLocaleTimeString()}</span></div>
+      ${body ? `<pre class="code">${body}</pre>` : ''}</div>`;
+  }).join('');
+  return `${msgs.length > shown.length ? `<div class="note">Mostrando los últimos 500 de ${msgs.length} mensajes</div>` : ''}${rows}`;
 }
 
 function prettyText(text, ct) {
@@ -408,7 +465,7 @@ function runCommand(cmd) {
     settings: openSSLSettings,
     rules: () => openRules(),
     certificate: openCertificate,
-  }[cmd] || (() => {}))();
+  }[cmd] || (() => { if (cmd.startsWith('rules:')) openRules(cmd.slice(6)); }))();
 }
 
 // ---------------- Menú contextual ----------------
@@ -441,13 +498,18 @@ async function rowMenu(e, id) {
       '-',
       { label: 'Repetir', run: () => repeat(id) },
       { label: 'Editar y repetir…', run: () => openCompose(d) },
-      { label: 'Map Local (mockear respuesta)…', run: () => openRules(mapLocalFromDetail(d)) },
+      '-',
+      { label: 'Breakpoint en este endpoint', run: () => addRule('breakpointRules', { method: d.method, url: endpointPattern(d.url), request: true, response: true }, `Breakpoint agregado: ${endpointPattern(d.url)}`) },
+      { label: 'Map Local (mockear respuesta)…', run: () => openRules('mapLocalRules', mapLocalFromDetail(d)) },
+      { label: 'Map Remote…', run: () => openRules('mapRemoteRules', { method: '*', url: endpointPattern(d.url) }) },
+      { label: 'Script…', run: () => openRules('scriptRules', { name: `Script ${d.host}`, method: '*', url: endpointPattern(d.url) }) },
     ] : []),
+    ...(S.selected.size === 2 ? [{ label: 'Comparar los 2 seleccionados', run: () => { const [x, y] = [...S.selected].sort((m, n) => m - n); openDiff(x, y); } }] : []),
     '-',
     isSSLHost(f.host)
       ? { label: `Deshabilitar SSL Proxying para ${f.host}`, run: () => removeSSLHost(f.host) }
       : { label: `Habilitar SSL Proxying para ${f.host}`, run: () => addSSLHost(f.host) },
-    { label: `Bloquear ${f.host}`, run: () => addBlockRule(`*://${f.host}/*`) },
+    { label: `Bloquear ${f.host}`, run: () => addBlockRule(`*://${f.host}*`) },
     { label: S.pinned.has(f.host) ? `Desfijar ${f.host}` : `Fijar ${f.host}`, run: () => togglePin(f.host) },
     '-',
     { label: S.selected.size > 1 ? `Exportar ${S.selected.size} como HAR…` : 'Exportar como HAR…', run: () => api.exportHAR(selectedIds()) },
@@ -481,7 +543,8 @@ function togglePin(host) {
 }
 
 // ---------------- Modales ----------------
-function openModal(title, bodyHTML, buttons) {
+function openModal(title, bodyHTML, buttons, { wide = false } = {}) {
+  $('#modal').classList.toggle('wide', wide);
   $('#modal').innerHTML = `<div class="m-head">${esc(title)}</div><div class="m-body">${bodyHTML}</div>
     <div class="m-foot">${buttons.map((b, i) => `<button class="btn ${b.cls || ''}" data-b="${i}">${esc(b.label)}</button>`).join('')}</div>`;
   $('#modal-backdrop').hidden = false;
@@ -534,6 +597,8 @@ function openSSLSettings() {
       <span class="hint">(puede romper apps con certificate pinning)</span></label>
     <label>Dominios a interceptar <span class="hint">Uno por línea. Acepta comodines: *.uala.com.ar, api.*.com</span>
       <textarea id="s-hosts" rows="8" spellcheck="false">${esc(s.sslHosts.join('\n'))}</textarea></label>
+    <label class="inline"><input type="checkbox" id="s-http2" ${s.http2 !== false ? 'checked' : ''}> Habilitar HTTP/2
+      <span class="hint">(necesario para gRPC; desactivalo si un cliente falla)</span></label>
     <label class="inline"><input type="checkbox" id="s-verify" ${s.verifyUpstreamTLS ? 'checked' : ''}> Verificar certificados de los servidores
       <span class="hint">(desactivalo solo para servidores de desarrollo con certificados propios)</span></label>
     <div class="row2"><label class="narrow">Puerto<input id="s-port" type="number" min="1" max="65535" value="${S.app.port}"></label>
@@ -546,6 +611,7 @@ function openSSLSettings() {
           sslProxyAll: $('#s-all').checked,
           sslHosts: $('#s-hosts').value.split('\n').map((l) => l.trim()).filter(Boolean),
           verifyUpstreamTLS: $('#s-verify').checked,
+          http2: $('#s-http2').checked,
           autoSystemProxy: $('#s-auto').checked,
           port: Number($('#s-port').value) || 9090,
         });
@@ -588,12 +654,70 @@ function openCertificate() {
   ]);
 }
 
-// ---------- Reglas: Map Local + Block ----------
+// ---------- Reglas ----------
+const F = {
+  method: { key: 'method', label: 'Método', narrow: true, placeholder: '*' },
+  url: { key: 'url', label: 'URL (comodines *)', placeholder: 'https://api.example.com/v1/*' },
+};
+const RULE_TYPES = {
+  mapLocalRules: {
+    label: 'Map Local', hint: 'Responde con un mock sin ir al servidor',
+    fields: [[F.method, F.url, { key: 'status', label: 'Status', type: 'number', narrow: true }],
+      { key: 'headers', label: 'Headers de respuesta', type: 'headers', rows: 4 },
+      { key: 'body', label: 'Body de respuesta', type: 'textarea', rows: 10 }],
+    make: () => ({ method: 'GET', url: 'https://api.example.com/*', status: 200, headers: [['Content-Type', 'application/json']], body: '{\n  "ok": true\n}' }),
+    summary: (r) => String(r.status),
+  },
+  mapRemoteRules: {
+    label: 'Map Remote', hint: 'Redirige requests a otro servidor (ej. producción → local)',
+    fields: [[F.method, F.url], { key: 'to', label: 'Destino (esquema://host:puerto[/path])', placeholder: 'http://localhost:8080' },
+      { key: 'preserveHost', label: 'Mantener el header Host original', type: 'checkbox' }],
+    make: () => ({ method: '*', url: 'https://api.example.com/*', to: 'http://localhost:8080', preserveHost: false }),
+    summary: (r) => `→ ${r.to || ''}`,
+  },
+  breakpointRules: {
+    label: 'Breakpoints', hint: 'Pausa el request/response para editarlo antes de seguir',
+    fields: [[F.method, F.url], [{ key: 'request', label: 'Pausar request', type: 'checkbox' }, { key: 'response', label: 'Pausar response', type: 'checkbox' }]],
+    make: () => ({ method: '*', url: 'https://api.example.com/*', request: true, response: true }),
+    summary: (r) => [r.request && 'req', r.response && 'res'].filter(Boolean).join('+'),
+  },
+  scriptRules: {
+    label: 'Scripts', hint: 'JavaScript que modifica requests y responses al vuelo',
+    fields: [[{ key: 'name', label: 'Nombre', narrow: true }, F.method, F.url],
+      { key: 'code', label: 'Código', type: 'textarea', rows: 18, code: true }],
+    make: () => ({
+      name: 'Mi script', method: '*', url: 'https://api.example.com/*',
+      code: `// request: { method, url, headers, body }  ·  response: { statusCode, headers, body }
+// Devolvé el objeto modificado. console.log() aparece en la pestaña Timing del request.
+// context.sharedState persiste entre ejecuciones.
+
+async function onRequest(context, url, request) {
+  // request.headers['Authorization'] = 'Bearer token-de-prueba';
+  return request;
+}
+
+async function onResponse(context, url, request, response) {
+  // const body = JSON.parse(response.body);
+  // body.feature_flag = true;
+  // response.body = body;   // se serializa a JSON automáticamente
+  return response;
+}
+`,
+    }),
+    summary: (r) => r.name || '',
+  },
+  blockRules: {
+    label: 'Block List', hint: 'Corta la conexión de los requests que coincidan',
+    fields: [[F.method, F.url]],
+    make: () => ({ method: '*', url: '*://ads.example.com/*' }),
+    summary: () => '',
+  },
+};
+
 function mapLocalFromDetail(d) {
   const r = d.response;
   let u; try { u = new URL(d.url); } catch { u = null; }
   return {
-    enabled: true,
     method: d.method,
     url: u ? `${u.protocol}//${u.host}${u.pathname}*` : d.url,
     status: r ? r.statusCode : 200,
@@ -602,73 +726,224 @@ function mapLocalFromDetail(d) {
   };
 }
 
-async function addBlockRule(url) {
-  const rules = [...S.app.settings.blockRules, { id: Date.now(), enabled: true, url }];
-  S.app = await api.updateSettings({ blockRules: rules });
-  toast(`Bloqueado: ${url}`);
+function endpointPattern(url) {
+  try { const u = new URL(url); return `${u.protocol}//${u.host}${u.pathname}*`; } catch { return url; }
 }
 
-function openRules(prefill) {
-  let ml = JSON.parse(JSON.stringify(S.app.settings.mapLocalRules));
-  let bl = JSON.parse(JSON.stringify(S.app.settings.blockRules));
-  let editing = null;
-  if (prefill) { editing = { id: Date.now(), ...prefill }; ml.push(editing); }
+async function addRule(type, rule, msg) {
+  const list = [...(S.app.settings[type] || []), { id: Date.now(), enabled: true, ...rule }];
+  S.app = await api.updateSettings({ [type]: list });
+  if (msg) toast(msg);
+}
 
-  const draw = () => {
-    const list = ml.map((r) => `<div class="rule${editing && editing.id === r.id ? ' sel' : ''}" data-id="${r.id}">
-      <input type="checkbox" data-toggle="ml" ${r.enabled ? 'checked' : ''}><b>${esc(r.method || '*')}</b><span class="grow" data-edit>${esc(r.url)}</span>
-      <span>${esc(r.status)}</span><button class="small-btn btn" data-del="ml">✕</button></div>`).join('') || '<div class="note">Sin reglas</div>';
-    const blist = bl.map((r) => `<div class="rule" data-id="${r.id}"><input type="checkbox" data-toggle="bl" ${r.enabled ? 'checked' : ''}>
-      <span class="grow">${esc(r.url)}</span><button class="small-btn btn" data-del="bl">✕</button></div>`).join('') || '<div class="note">Sin reglas</div>';
-    const ed = editing ? `
-      <div class="row2"><label class="narrow">Método<input id="r-method" value="${esc(editing.method || '*')}"></label>
-      <label>URL (comodines *)<input id="r-url" value="${esc(editing.url)}" spellcheck="false"></label>
-      <label class="narrow">Status<input id="r-status" type="number" value="${esc(editing.status)}"></label></div>
-      <label>Headers de respuesta<textarea id="r-headers" rows="4" spellcheck="false">${esc(headersToText(editing.headers))}</textarea></label>
-      <label>Body de respuesta<textarea id="r-body" rows="9" spellcheck="false">${esc(editing.body)}</textarea></label>
-      <div><button class="btn" id="r-apply">Aplicar cambios a la regla</button></div>` : '';
-    $('#rules-root').innerHTML = `
-      <div style="display:flex;align-items:center"><b>Map Local</b><span class="hint" style="margin-left:8px">Responde con un mock sin ir al servidor</span>
-        <span class="tb-flex"></span><button class="btn" id="r-add">＋ Nueva</button></div>
-      <div class="rule-list" id="ml-list">${list}</div>${ed}
-      <div style="display:flex;align-items:center;margin-top:8px"><b>Block List</b><span class="hint" style="margin-left:8px">Corta la conexión</span>
-        <span class="tb-flex"></span><input id="b-url" placeholder="*://ads.example.com/*" style="width:260px"><button class="btn" id="b-add">Agregar</button></div>
-      <div class="rule-list">${blist}</div>`;
+async function addBlockRule(url) {
+  await addRule('blockRules', { method: '*', url }, `Bloqueado: ${url}`);
+}
+
+function openRules(type = 'mapLocalRules', prefill) {
+  const lists = {};
+  for (const k of Object.keys(RULE_TYPES)) lists[k] = JSON.parse(JSON.stringify(S.app.settings[k] || []));
+  let current = type;
+  let editing = null;
+  if (prefill) { editing = { id: Date.now(), enabled: true, ...RULE_TYPES[type].make(), ...prefill }; lists[type].push(editing); }
+
+  const fieldHTML = (f, r) => {
+    const v = r[f.key];
+    const id = `rf-${f.key}`;
+    if (f.type === 'checkbox') return `<label class="inline"><input type="checkbox" id="${id}" data-k="${f.key}" ${v ? 'checked' : ''}> ${esc(f.label)}</label>`;
+    if (f.type === 'textarea' || f.type === 'headers') {
+      const val = f.type === 'headers' ? headersToText(v) : (v || '');
+      return `<label>${esc(f.label)}<textarea id="${id}" data-k="${f.key}" data-type="${f.type}" rows="${f.rows || 6}" spellcheck="false" ${f.code ? 'class="code-editor"' : ''}>${esc(val)}</textarea></label>`;
+    }
+    return `<label class="${f.narrow ? 'narrow' : ''}">${esc(f.label)}<input id="${id}" data-k="${f.key}" ${f.type === 'number' ? 'type="number"' : ''} value="${esc(v ?? '')}" placeholder="${esc(f.placeholder || '')}" spellcheck="false"></label>`;
   };
 
-  const saveEditing = () => {
-    if (!editing || !$('#r-url')) return;
-    Object.assign(editing, {
-      method: $('#r-method').value.trim().toUpperCase() || '*',
-      url: $('#r-url').value.trim(),
-      status: Number($('#r-status').value) || 200,
-      headers: textToHeaders($('#r-headers').value),
-      body: $('#r-body').value,
-    });
+  const draw = () => {
+    const T = RULE_TYPES[current];
+    const list = lists[current];
+    const tabs = Object.entries(RULE_TYPES).map(([k, t]) => {
+      const n = lists[k].filter((r) => r.enabled).length;
+      return `<button class="${k === current ? 'active' : ''}" data-type="${k}">${esc(t.label)}${n ? ` <span class="badge">${n}</span>` : ''}</button>`;
+    }).join('');
+    const rows = list.map((r) => `<div class="rule${editing && editing.id === r.id ? ' sel' : ''}" data-id="${r.id}">
+      <input type="checkbox" data-toggle ${r.enabled ? 'checked' : ''}><b>${esc(r.method || '*')}</b>
+      <span class="grow">${esc(r.url)}</span><span class="muted">${esc(T.summary(r))}</span>
+      <button class="small-btn btn" data-del>✕</button></div>`).join('') || '<div class="note">Sin reglas. Creá una con ＋ Nueva o desde el menú contextual de un request.</div>';
+    const editor = editing && list.includes(editing) ? T.fields.map((f) => (Array.isArray(f)
+      ? `<div class="row2">${f.map((x) => fieldHTML(x, editing)).join('')}</div>` : fieldHTML(f, editing))).join('') : '';
+    $('#rules-root').innerHTML = `<div class="tabs rule-tabs">${tabs}</div>
+      <div style="display:flex;align-items:center"><span class="hint">${esc(T.hint)}</span><span class="tb-flex"></span>
+      <button class="btn" id="r-add">＋ Nueva</button></div>
+      <div class="rule-list">${rows}</div>
+      ${editor ? `<div class="rule-editor">${editor}</div>` : ''}`;
+  };
+
+  // Los cambios del editor se aplican al objeto en vivo
+  const onInput = (e) => {
+    const k = e.target.dataset.k;
+    if (!k || !editing) return;
+    if (e.target.type === 'checkbox') editing[k] = e.target.checked;
+    else if (e.target.dataset.type === 'headers') editing[k] = textToHeaders(e.target.value);
+    else if (e.target.type === 'number') editing[k] = Number(e.target.value);
+    else editing[k] = k === 'method' ? e.target.value.toUpperCase() : e.target.value;
   };
 
   openModal('Reglas', '<div id="rules-root" style="display:flex;flex-direction:column;gap:8px"></div>', [
     { label: 'Cancelar' },
     {
       label: 'Guardar', cls: 'primary', run: async () => {
-        saveEditing();
-        S.app = await api.updateSettings({ mapLocalRules: ml, blockRules: bl });
+        try {
+          for (const r of lists.mapRemoteRules) if (r.enabled) new URL(r.to);
+        } catch { toast('Map Remote: el destino debe ser una URL válida (ej. http://localhost:8080)'); return true; }
+        S.app = await api.updateSettings(lists);
         toast('Reglas guardadas');
+        return false;
       },
     },
-  ]);
+  ], { wide: true });
   draw();
-  $('#rules-root').onclick = (e) => {
-    const rowEl = e.target.closest('.rule');
-    const id = rowEl && Number(rowEl.dataset.id);
-    if (e.target.id === 'r-add') { saveEditing(); editing = { id: Date.now(), enabled: true, method: 'GET', url: 'https://api.example.com/*', status: 200, headers: [['Content-Type', 'application/json']], body: '{\n  "ok": true\n}' }; ml.push(editing); draw(); }
-    else if (e.target.id === 'r-apply') { saveEditing(); draw(); }
-    else if (e.target.id === 'b-add') { const v = $('#b-url').value.trim(); if (v) { saveEditing(); bl.push({ id: Date.now(), enabled: true, url: v }); draw(); } }
-    else if (e.target.dataset.del === 'ml') { ml = ml.filter((r) => r.id !== id); if (editing && editing.id === id) editing = null; draw(); }
-    else if (e.target.dataset.del === 'bl') { saveEditing(); bl = bl.filter((r) => r.id !== id); draw(); }
-    else if (e.target.dataset.toggle) { const arr = e.target.dataset.toggle === 'ml' ? ml : bl; const r = arr.find((x) => x.id === id); if (r) r.enabled = e.target.checked; }
-    else if (rowEl && e.target.closest('#ml-list')) { saveEditing(); editing = ml.find((r) => r.id === id); draw(); }
+  const root = $('#rules-root');
+  root.addEventListener('input', onInput);
+  root.addEventListener('change', (e) => {
+    if (e.target.dataset.toggle !== undefined) {
+      const r = lists[current].find((x) => x.id === Number(e.target.closest('.rule').dataset.id));
+      if (r) r.enabled = e.target.checked;
+      return;
+    }
+    if (e.target.dataset.k) {
+      // Refrescamos la fila de la lista sin perder el foco del editor
+      const row = root.querySelector(`.rule[data-id="${editing.id}"]`);
+      if (row) {
+        row.querySelector('b').textContent = editing.method || '*';
+        row.querySelector('.grow').textContent = editing.url;
+        row.querySelector('.muted').textContent = RULE_TYPES[current].summary(editing);
+      }
+    }
+  });
+  root.addEventListener('keydown', (e) => {
+    // Tab inserta indentación en el editor de código
+    if (e.key === 'Tab' && e.target.classList.contains('code-editor')) {
+      e.preventDefault();
+      const t = e.target;
+      const { selectionStart: a, selectionEnd: b } = t;
+      t.value = `${t.value.slice(0, a)}  ${t.value.slice(b)}`;
+      t.selectionStart = t.selectionEnd = a + 2;
+      onInput(e);
+    }
+  });
+  root.addEventListener('click', (e) => {
+    const tab = e.target.closest('.rule-tabs button');
+    if (tab) { current = tab.dataset.type; editing = null; draw(); return; }
+    if (e.target.id === 'r-add') {
+      editing = { id: Date.now(), enabled: true, ...RULE_TYPES[current].make() };
+      lists[current].push(editing);
+      draw();
+      return;
+    }
+    const row = e.target.closest('.rule');
+    if (!row) return;
+    const id = Number(row.dataset.id);
+    if (e.target.dataset.del !== undefined) {
+      lists[current] = lists[current].filter((r) => r.id !== id);
+      if (editing && editing.id === id) editing = null;
+      draw();
+    } else if (e.target.dataset.toggle === undefined) {
+      editing = lists[current].find((r) => r.id === id);
+      draw();
+    }
+  });
+}
+
+// ---------- Breakpoints (editor en vivo) ----------
+function showBreakpoint() {
+  const bp = S.bpQueue[0];
+  if (!bp) { $('#bp-backdrop').hidden = true; return; }
+  const isReq = bp.phase === 'request';
+  const methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+  if (isReq && !methods.includes(bp.method)) methods.push(bp.method);
+  const top = isReq
+    ? `<div class="row2"><label class="narrow">Método<select id="bp-method">${methods.map((m) => `<option${m === bp.method ? ' selected' : ''}>${m}</option>`).join('')}</select></label>
+       <label>URL<input id="bp-url" value="${esc(bp.url)}" spellcheck="false"></label></div>`
+    : `<div class="mono muted">${esc(bp.method)} ${esc(bp.url)}</div>
+       <div class="row2"><label class="narrow">Status<input id="bp-status" type="number" value="${bp.statusCode}"></label><span></span></div>`;
+  const bodyField = bp.binaryBody
+    ? `<div class="note">Body binario de ${fmtSize(bp.binaryBody)}: se envía sin cambios.</div>`
+    : `<label>Body <span class="hint"><button class="small-btn btn" id="bp-format" type="button">Formatear JSON</button></span>
+       <textarea id="bp-body" rows="12" spellcheck="false">${esc(bp.body || '')}</textarea></label>`;
+  $('#bp-modal').innerHTML = `<div class="m-head">⏸ Breakpoint · ${isReq ? 'Request' : 'Response'}
+      <span class="tb-flex"></span>${S.bpQueue.length > 1 ? `<span class="badge">${S.bpQueue.length - 1} más en cola</span>` : ''}</div>
+    <div class="m-body">${top}
+      <label>Headers <span class="hint">Uno por línea: Nombre: valor</span><textarea id="bp-headers" rows="7" spellcheck="false">${esc(headersToText(bp.headers))}</textarea></label>
+      ${bodyField}</div>
+    <div class="m-foot"><button class="btn danger" id="bp-abort">Abortar</button><span class="tb-flex"></span>
+      ${S.bpQueue.length > 1 ? '<button class="btn" id="bp-all">Ejecutar todos</button>' : ''}
+      <button class="btn primary" id="bp-exec">Ejecutar ⏎</button></div>`;
+  $('#bp-backdrop').hidden = false;
+  const originalBody = bp.body || '';
+  const finish = async (action) => {
+    const decision = { action };
+    if (action === 'execute') {
+      decision.headers = textToHeaders($('#bp-headers').value);
+      if (isReq) { decision.method = $('#bp-method').value; decision.url = $('#bp-url').value.trim(); } else decision.statusCode = Number($('#bp-status').value) || bp.statusCode;
+      const bodyEl = $('#bp-body');
+      if (bodyEl && bodyEl.value !== originalBody) decision.body = bodyEl.value;
+    }
+    S.bpQueue.shift();
+    await api.resolveBreakpoint(bp.bpId, decision);
+    showBreakpoint();
   };
+  $('#bp-exec').onclick = () => finish('execute');
+  $('#bp-abort').onclick = () => finish('abort');
+  if ($('#bp-all')) {
+    $('#bp-all').onclick = async () => {
+      await finish('execute');
+      while (S.bpQueue.length) { const next = S.bpQueue.shift(); await api.resolveBreakpoint(next.bpId, { action: 'execute' }); }
+      showBreakpoint();
+    };
+  }
+  if ($('#bp-format')) {
+    $('#bp-format').onclick = () => {
+      try { $('#bp-body').value = JSON.stringify(JSON.parse($('#bp-body').value), null, 2); } catch { toast('El body no es JSON válido'); }
+    };
+  }
+  $('#bp-modal').onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') finish('execute'); };
+  const first = $('#bp-url') || $('#bp-status');
+  if (first) first.focus();
+}
+
+// ---------- Comparar dos requests ----------
+function flowAsText(d) {
+  const pretty = (body, ct) => {
+    if (!body || !body.size) return '';
+    const bytes = b64ToBytes(body.base64);
+    if (looksBinary(bytes)) return `<${fmtSize(bytes.length)} binarios>`;
+    const text = bytesToText(bytes);
+    if ((ct || '').includes('json') || /^\s*[[{]/.test(text)) { try { return JSON.stringify(JSON.parse(text), null, 2); } catch { /* texto */ } }
+    return text;
+  };
+  const req = `${d.method} ${d.url}\n${d.request.headers.map(([k, v]) => `${k}: ${v}`).join('\n')}\n\n${pretty(d.request.body, headerGet(d.request.headers, 'content-type'))}`;
+  const r = d.response;
+  const res = r ? `HTTP ${r.statusCode} ${r.statusMessage || ''}\n${r.headers.map(([k, v]) => `${k}: ${v}`).join('\n')}\n\n${pretty(r.body, headerGet(r.headers, 'content-type'))}` : `(sin respuesta) ${d.error || ''}`;
+  return { req, res };
+}
+
+async function openDiff(idA, idB) {
+  const [a, b] = await Promise.all([api.detail(idA), api.detail(idB)]);
+  if (!a || !b) return;
+  const ta = flowAsText(a);
+  const tb = flowAsText(b);
+  const render = (x, y) => {
+    const lines = diffLines(x, y);
+    const changes = lines.filter((l) => l.t !== ' ').length;
+    return { changes, html: lines.map((l) => `<div class="dl d${l.t === '+' ? 'add' : l.t === '-' ? 'del' : 'eq'}"><span class="dg">${l.t}</span>${esc(l.s)}</div>`).join('') };
+  };
+  const rq = render(ta.req, tb.req);
+  const rs = render(ta.res, tb.res);
+  openModal(`Comparar #${idA} ↔ #${idB}`, `
+    <div class="diff-legend"><span class="ddel">− #${idA} ${esc(a.method)} ${esc(a.url)}</span><span class="dadd">+ #${idB} ${esc(b.method)} ${esc(b.url)}</span></div>
+    <div class="sub-title">Request · ${rq.changes} líneas distintas</div><div class="diff">${rq.html}</div>
+    <div class="sub-title">Response · ${rs.changes} líneas distintas</div><div class="diff">${rs.html}</div>`,
+  [{ label: 'Cerrar', cls: 'primary' }], { wide: true });
 }
 
 // ---------------- Toast ----------------

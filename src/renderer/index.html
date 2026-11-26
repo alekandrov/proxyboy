@@ -18,7 +18,7 @@
     <input id="search" type="search" placeholder="Filtrar URL, método, status, header… (⌘F)" spellcheck="false">
     <div class="tb-flex"></div>
     <button id="btn-compose" class="tb-btn" title="Nuevo request (⌘N)">＋ Request</button>
-    <button id="btn-rules" class="tb-btn" title="Map Local / Block">Reglas</button>
+    <button id="btn-rules" class="tb-btn" title="Map Local, Map Remote, Breakpoints, Scripts, Block (⌘⌥L)">Reglas</button>
     <button id="btn-settings" class="tb-btn" title="SSL Proxying">SSL</button>
     <button id="btn-cert" class="tb-btn" title="Certificado raíz">Certificado <span id="cert-dot" class="dot"></span></button>
   </header>
@@ -93,7 +93,7 @@
                   <button data-tab="body" class="active">Body</button>
                   <button data-tab="cookies">Set-Cookie</button>
                   <button data-tab="raw">Raw</button>
-                  <button data-tab="timing">Timing</button>
+                  <button data-tab="timing">Info</button>
                 </div>
               </div>
               <div class="pane-content" id="res-content"></div>
@@ -106,6 +106,7 @@
 
   <div id="ctx-menu" class="menu" hidden></div>
   <div id="modal-backdrop" hidden><div id="modal"></div></div>
+  <div id="bp-backdrop" hidden><div id="bp-modal"></div></div>
   <div id="toast" hidden></div>
 
   <script src="util.js"></script>
