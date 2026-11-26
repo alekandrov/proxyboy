@@ -25,6 +25,7 @@ Hecho con **Electron + Node.js**, sin servicios externos: todo corre en tu máqu
   - **Block List**: corta conexiones a URLs que coincidan.
 - **Proxy del sistema** con un clic (se desactiva solo al salir).
 - **Instalación del certificado** en el sistema (macOS llavero / Windows almacén del usuario) y página `http://proxy.boy` para bajarlo desde el celular.
+- Hacia los servidores confía en las CAs del sistema operativo además de las de Node: funciona con inspección TLS corporativa (Netskope, Zscaler…).
 - Modo consola sin UI.
 
 ## Uso
@@ -43,7 +44,35 @@ npm start
 4. Las apps reutilizan conexiones abiertas: si no ves requests nuevos, reiniciá la app (para apps del simulador: clic derecho → *Reiniciar en el simulador*).
 
 ### Emulador Android o teléfono por USB
-En **Certificado → Android**, tocá **Configurar** en el dispositivo: pone el proxy (`10.0.2.2` en emuladores, `adb reverse` en USB),
+**Recomendado: Proxyboy VPN.** En **Certificado → Android**, tocá **Activar VPN**: instala la app *Proxyboy VPN* en el dispositivo,
+le da el permiso de VPN (sin diálogo) y la conecta a Proxyboy. La VPN toma todo el tráfico del sistema, así que también se ve
+el de apps que ignoran el proxy de Android (**Flutter, React Native**). Cada request aparece con el nombre de la app que lo hizo
+y el dispositivo, y el SSL Proxying por app funciona con el paquete (ej. `com.uala.app`). HTTP y HTTPS van a Proxyboy
+(el nombre del host sale del SNI o del header `Host`); el resto del TCP y el UDP salen directo, y QUIC se bloquea para que las apps usen TCP.
+Lo que Proxyboy no descifra (sin regla de SSL Proxying) sale directo desde el dispositivo, como sin VPN.
+Al cerrar Proxyboy se apaga la VPN. Para descifrar HTTPS la app igual tiene que confiar en el certificado (ver abajo).
+La app está en `android-vpn/` y se compila con `android-vpn/build.sh` (solo SDK build-tools + JDK, sin Gradle);
+el APK queda en `src/main/assets/proxyboy-vpn.apk`.
+
+**Certificado:** en emuladores con imagen **Google APIs** (permiten `adb root`) *Activar VPN* también instala la CA de Proxyboy
+como certificado de usuario. En imágenes **Google Play** o teléfonos reales queda en `Descargas/proxyboy-ca.crt` para instalarla desde Ajustes.
+Cada compu genera su propia CA, así que esto se hace una vez por compu y por emulador.
+
+**Desde la terminal** (mismo resultado, sin abrir la UI):
+
+```bash
+npm run android                          # todos los dispositivos conectados
+npm run android -- --serial emulator-5554
+npm run android -- --stop                # apaga la VPN
+```
+
+Usa la CA y el puerto de la app de escritorio (o `--data ~/.proxyboy` para la del modo consola).
+
+**Para ver una app descifrada:** clic derecho sobre la app → SSL Proxying. La app tiene que confiar en CAs de usuario
+(`network_security_config` con `<certificates src="user"/>` en `debug-overrides`, solo builds debug). Flutter no usa ese almacén:
+hay que confiar en la CA desde el código de la app.
+
+**Alternativa: proxy HTTP de Android.** Tocá **Proxy** en el dispositivo: pone el proxy (`10.0.2.2` en emuladores, `adb reverse` en USB),
 copia el certificado a `Descargas/proxyboy-ca.crt` y abre Ajustes. En el dispositivo: Seguridad → Más ajustes de seguridad →
 Encriptación y credenciales → Instalar un certificado → **Certificado de CA**. La app tiene que confiar en CAs de usuario
 (`network_security_config` con `<certificates src="user"/>` en `debug-overrides`). Al cerrar Proxyboy se quita el proxy del dispositivo.

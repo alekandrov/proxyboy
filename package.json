@@ -6,6 +6,7 @@
   "scripts": {
     "start": "electron .",
     "proxy": "node src/main/cli.js",
+    "android": "node src/main/android-cli.js",
     "test": "node test/smoke.js",
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win"

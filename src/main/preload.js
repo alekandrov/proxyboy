@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('proxyboy', {
   copy: (text) => ipcRenderer.invoke('clipboard:write', text),
   androidSetup: (serial) => ipcRenderer.invoke('android:setup', serial),
   androidClear: (serial) => ipcRenderer.invoke('android:clear', serial),
+  androidVpnStart: (serial, deviceName) => ipcRenderer.invoke('android:vpn-start', serial, deviceName),
+  androidVpnStop: (serial) => ipcRenderer.invoke('android:vpn-stop', serial),
   installCertInSimulators: (udids) => ipcRenderer.invoke('sim:install-cert', udids),
   restartSimulatorApp: (udid, bundleId) => ipcRenderer.invoke('sim:restart-app', udid, bundleId),
   directConnections: (appId) => ipcRenderer.invoke('app:direct', appId),

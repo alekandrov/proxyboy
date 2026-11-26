@@ -10,6 +10,7 @@ const { EventEmitter } = require('events');
 const { Duplex } = require('stream');
 const { URL } = require('url');
 const { Upstream, HOP_BY_HOP } = require('./upstream');
+const trust = require('./trust');
 const { FrameParser } = require('./websocket');
 const { ProcessResolver, appFromUserAgent, isLoopback } = require('./procinfo');
 const {
@@ -162,6 +163,22 @@ function duplexOver(sock) {
   return d;
 }
 
+// Headers que manda la app Proxyboy VPN (Android) en el CONNECT: paquete, nombre y dispositivo
+function appFromVpnHeaders(headers) {
+  const pkg = headers['x-proxyboy-app'];
+  if (!pkg || !/^[\w.]{1,200}$/.test(pkg)) return null;
+  const dec = (v) => { try { return v ? decodeURIComponent(v) : ''; } catch { return v; } };
+  const device = dec(headers['x-proxyboy-device']);
+  return {
+    id: `android:${pkg}${device ? `@${device}` : ''}`,
+    name: dec(headers['x-proxyboy-app-name']) || pkg,
+    bundleId: pkg,
+    device: device || 'Android',
+    source: 'android-vpn',
+    android: true,
+  };
+}
+
 class ProxyServer extends EventEmitter {
   constructor({ ca, port = 9090, host = '0.0.0.0', resolveApps = true } = {}) {
     super();
@@ -266,6 +283,7 @@ class ProxyServer extends EventEmitter {
     if (this.resolver && isLoopback(sock.remoteAddress)) {
       holder.ready = this.resolver.lookup(sock.remotePort).then((app) => {
         holder.settled = true;
+        if (holder.fixed) return holder.app; // ya lo informó la VPN de Android
         if (app) { holder.app = app; this.apps.set(app.id, app); }
         return app;
       });
@@ -451,8 +469,12 @@ class ProxyServer extends EventEmitter {
     if (ctx.mitm) {
       const t = req.socket._proxyboyTarget || {};
       const isTls = req.socket instanceof tls.TLSSocket;
+      if (!isTls && /^https?:\/\//i.test(req.url)) return new URL(req.url); // absoluta (cliente que cree hablarle a un proxy)
       const hostHeader = req.headers.host || `${t.host}:${t.port}`;
-      return new URL(`${isTls ? 'https' : 'http'}://${hostHeader}${req.url}`);
+      const url = new URL(`${isTls ? 'https' : 'http'}://${hostHeader}${req.url}`);
+      // Túnel hacia esta misma compu con Host por IP (ej. 10.0.2.2 desde el emulador vía la VPN): esa IP no existe acá
+      if (t.host === '127.0.0.1' && url.hostname !== t.host && net.isIP(url.hostname)) url.hostname = '127.0.0.1';
+      return url;
     }
     if (/^https?:\/\//i.test(req.url)) return new URL(req.url);
     return null;
@@ -826,8 +848,17 @@ Ajustes → General → Información → Ajustes de confianza de certificados.</
 
     const forced = req.headers['x-proxyboy-intercept'] === '1';
     let intercept = forced || this.shouldIntercept(host);
-    // SSL Proxying por app: esperamos (con tope) a saber qué app abrió la conexión
     const holder = clientSocket._pbClient;
+    // La app Proxyboy VPN de Android nos dice qué app abrió la conexión
+    const vpnApp = appFromVpnHeaders(req.headers);
+    if (vpnApp && holder) {
+      holder.app = vpnApp;
+      holder.fixed = true;
+      holder.settled = true;
+      holder.ready = Promise.resolve(vpnApp);
+      this.apps.set(vpnApp.id, vpnApp);
+    }
+    // SSL Proxying por app: esperamos (con tope) a saber qué app abrió la conexión
     if (!intercept && (this.settings.sslApps || []).length && holder) {
       await this._waitClient(holder);
       intercept = this._appIntercepted(holder.app);
@@ -857,6 +888,18 @@ Ajustes → General → Información → Ajustes de confianza de certificados.</
     }, clientSocket, rawHeadersToPairs(req.rawHeaders));
     flow.request.headers = rawHeadersToPairs(req.rawHeaders);
     flow.tags.push('tunnel');
+    // La VPN de Android puede conectarse sola: lo que no desciframos sale directo desde el dispositivo,
+    // igual que sin VPN (así no pasa por la inspección TLS corporativa de esta compu, ej. Netskope)
+    if (vpnApp && req.headers['x-proxyboy-direct-ok'] === '1') {
+      flow.tags.push('direct');
+      flow.state = 'completed';
+      flow.timings.end = Date.now();
+      flow.response = { statusCode: 200, statusMessage: 'Directo desde el dispositivo', httpVersion: '1.1', headers: [], body: null, bodySize: 0 };
+      this._note(flow, 'Sin SSL Proxying para este host/app: la conexión va directo desde el dispositivo (no pasa por Proxyboy).');
+      this._update(flow);
+      clientSocket.end('HTTP/1.1 204 Direct\r\nX-Proxyboy-Direct: 1\r\n\r\n');
+      return;
+    }
     const upstream = net.connect(port, host, () => {
       flow.serverIp = upstream.remoteAddress;
       clientSocket.write('HTTP/1.1 200 Connection Established\r\nProxy-Agent: Proxyboy\r\n\r\n');
@@ -977,7 +1020,10 @@ Ajustes → General → Información → Ajustes de confianza de certificados.</
 
     const connectOpts = { host: target.hostname, port };
     const upstream = secure
-      ? tls.connect({ ...connectOpts, servername: target.hostname, rejectUnauthorized: this.settings.verifyUpstreamTLS, ALPNProtocols: ['http/1.1'] })
+      ? tls.connect({
+        ...connectOpts, servername: target.hostname, rejectUnauthorized: this.settings.verifyUpstreamTLS, ALPNProtocols: ['http/1.1'],
+        secureContext: this.settings.verifyUpstreamTLS ? trust.secureContext() : undefined,
+      })
       : net.connect(connectOpts);
     const onReady = () => {
       let raw = `${req.method} ${flow.path} HTTP/1.1\r\n`;
