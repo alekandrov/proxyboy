@@ -38,6 +38,16 @@ npm install
 npm start
 ```
 
+### Ícono en Aplicaciones (macOS)
+
+```bash
+npm run install-app
+```
+
+Crea **Proxyboy.app** en Aplicaciones (aparece en Launchpad y Spotlight). Corre el código de este repo: después de un `git pull` alcanza con reabrirla. Si actualizás Electron (`npm install`), volvé a correr el comando.
+
+Al abrir Proxyboy se activa solo el **proxy del sistema** y se desactiva al cerrarlo (se puede cambiar en **SSL**).
+
 1. Tocá **Certificado → Instalar y confiar** (una sola vez). Si usás el simulador de iOS, tocá también **Instalar en simuladores**: cada simulador tiene su propio almacén de certificados.
 2. Tocá **Proxy del sistema**, o configurá tu app/dispositivo con `IP:9090`.
 3. Elegí qué descifrar: clic derecho sobre una app → *Habilitar SSL Proxying para todo el tráfico de…*, o sobre un dominio, o agregá patrones en **SSL** (ej. `*.ua.la`).

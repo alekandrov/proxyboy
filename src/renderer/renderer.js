@@ -795,7 +795,7 @@ function openSSLSettings() {
     <label class="inline"><input type="checkbox" id="s-verify" ${s.verifyUpstreamTLS ? 'checked' : ''}> Verificar certificados de los servidores
       <span class="hint">(desactivalo solo para servidores de desarrollo con certificados propios)</span></label>
     <div class="row2"><label class="narrow">Puerto<input id="s-port" type="number" min="1" max="65535" value="${S.app.port}"></label>
-    <label class="inline"><input type="checkbox" id="s-auto" ${s.autoSystemProxy ? 'checked' : ''}> Activar proxy del sistema al abrir Proxyboy</label></div>`,
+    <label class="inline"><input type="checkbox" id="s-auto" ${s.autoSystemProxy ? 'checked' : ''}> Activar proxy del sistema al abrir Proxyboy <span class="hint">(se desactiva solo al cerrar)</span></label></div>`,
   [{ label: 'Cancelar' }, {
     label: 'Guardar', cls: 'primary', run: async () => {
       try {

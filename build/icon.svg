@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#6D28D9"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".2"/>
+      <stop offset=".5" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000" flood-opacity=".28"/>
+    </filter>
+  </defs>
+  <!-- Base estilo macOS: 824px con margen de 100px -->
+  <g filter="url(#shadow)">
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#shine)"/>
+  </g>
+  <!-- Tráfico: ida (arriba) y vuelta (abajo) -->
+  <g fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#fff">
+      <path d="M262 300 H742"/>
+      <path d="M690 248 L742 300 L690 352"/>
+    </g>
+    <g stroke="#C7D2FE">
+      <path d="M762 724 H282"/>
+      <path d="M334 672 L282 724 L334 776"/>
+    </g>
+  </g>
+  <!-- Inspección: lupa en el centro -->
+  <circle cx="490" cy="500" r="112" fill="#312E81" stroke="#fff" stroke-width="40"/>
+  <path d="M574 584 L640 650" stroke="#fff" stroke-width="52" stroke-linecap="round"/>
+  <path d="M440 470 q50 -38 100 0" fill="none" stroke="#A5B4FC" stroke-width="18" stroke-linecap="round"/>
+</svg>

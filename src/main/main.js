@@ -15,6 +15,20 @@ const androidOwned = new Set();
 const androidVpnOwned = new Set();
 
 let win;
+const ICON = path.join(__dirname, 'assets', 'icon.png');
+app.setName('Proxyboy');
+
+// Una sola instancia: si se abre de nuevo (ej. desde el ícono), se muestra la ventana existente
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  });
+}
 let proxy;
 let ca;
 let systemProxyOwned = false; // solo lo desactivamos al salir si lo activamos nosotros
@@ -34,12 +48,19 @@ const defaults = {
   blockRules: [],
   breakpointRules: [],
   scriptRules: [],
-  autoSystemProxy: false,
+  autoSystemProxy: true, // al abrir Proxyboy se activa el proxy del sistema (como Proxyman)
 };
 let settings = { ...defaults };
 
 function loadSettings() {
   try { settings = { ...defaults, ...JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) }; } catch { /* primera vez */ }
+  // Migración única: antes venía apagado por defecto; lo encendemos una vez y después se respeta lo que elija el usuario
+  const migrations = settings.migrations || {};
+  if (!migrations.autoSystemProxyOn) {
+    settings.autoSystemProxy = true;
+    settings.migrations = { ...migrations, autoSystemProxyOn: true };
+    try { saveSettings(); } catch { /* se guarda en el próximo cambio */ }
+  }
 }
 function saveSettings() {
   fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2));
@@ -149,6 +170,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 500,
     title: 'Proxyboy',
+    icon: ICON,
     backgroundColor: '#1e1e1e',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {
@@ -346,6 +368,8 @@ function registerIPC() {
 }
 
 app.whenReady().then(async () => {
+  if (!app.hasSingleInstanceLock()) return;
+  if (process.platform === 'darwin' && app.dock) app.dock.setIcon(ICON);
   loadSettings();
   ca = new CertificateAuthority(app.getPath('userData'));
   proxy = new ProxyServer({ ca, port: settings.port });

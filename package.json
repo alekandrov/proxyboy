@@ -9,7 +9,8 @@
     "android": "node src/main/android-cli.js",
     "test": "node test/smoke.js",
     "dist:mac": "electron-builder --mac",
-    "dist:win": "electron-builder --win"
+    "dist:win": "electron-builder --win",
+    "install-app": "bash scripts/install-mac-app.sh"
   },
   "license": "MIT",
   "dependencies": {
@@ -22,8 +23,20 @@
   "build": {
     "appId": "com.proxyboy.app",
     "productName": "Proxyboy",
-    "files": ["src/**/*", "package.json"],
-    "mac": { "target": "dmg" },
-    "win": { "target": "nsis" }
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": "dmg",
+      "icon": "build/icon.icns"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "directories": {
+      "buildResources": "build"
+    }
   }
 }
