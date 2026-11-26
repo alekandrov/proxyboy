@@ -1,0 +1,28 @@
+{
+  "name": "proxyboy",
+  "version": "0.1.0",
+  "description": "Proxy de debugging HTTP/HTTPS multiplataforma (estilo Proxyman)",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "proxy": "node src/main/cli.js",
+    "test": "node test/smoke.js",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "node-forge": "^1.3.1"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.proxyboy.app",
+    "productName": "Proxyboy",
+    "files": ["src/**/*", "package.json"],
+    "mac": { "target": "dmg" },
+    "win": { "target": "nsis" }
+  }
+}

@@ -1,0 +1,22 @@
+// Puente seguro entre la UI y el proceso principal.
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('proxyboy', {
+  state: () => ipcRenderer.invoke('state'),
+  allFlows: () => ipcRenderer.invoke('flows:all'),
+  detail: (id) => ipcRenderer.invoke('flows:detail', id),
+  clear: () => ipcRenderer.invoke('flows:clear'),
+  deleteFlows: (ids) => ipcRenderer.invoke('flows:delete', ids),
+  setRecording: (on) => ipcRenderer.invoke('recording:set', on),
+  updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch),
+  setSystemProxy: (on) => ipcRenderer.invoke('system-proxy:set', on),
+  installCert: () => ipcRenderer.invoke('cert:install'),
+  exportCert: () => ipcRenderer.invoke('cert:export'),
+  revealCert: () => ipcRenderer.invoke('cert:reveal'),
+  sendRequest: (req) => ipcRenderer.invoke('request:send', req),
+  exportHAR: (ids) => ipcRenderer.invoke('har:export', ids),
+  saveBody: (base64, name) => ipcRenderer.invoke('body:save', { base64, name }),
+  copy: (text) => ipcRenderer.invoke('clipboard:write', text),
+  onFlows: (cb) => ipcRenderer.on('flows', (_e, data) => cb(data)),
+  onCommand: (cb) => ipcRenderer.on('command', (_e, cmd) => cb(cmd)),
+});

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>Proxyboy</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header id="toolbar">
+    <div class="drag-spacer"></div>
+    <button id="btn-record" class="tb-btn" title="Grabar / Pausar (⌘R)"><span class="rec-dot"></span></button>
+    <button id="btn-clear" class="tb-btn" title="Limpiar (⌘K)">⌫</button>
+    <div class="tb-sep"></div>
+    <div id="proxy-info" class="pill" title="Dirección del proxy"></div>
+    <button id="btn-system-proxy" class="tb-btn toggle" title="Usar Proxyboy como proxy del sistema">Proxy del sistema</button>
+    <div class="tb-flex"></div>
+    <input id="search" type="search" placeholder="Filtrar URL, método, status, header… (⌘F)" spellcheck="false">
+    <div class="tb-flex"></div>
+    <button id="btn-compose" class="tb-btn" title="Nuevo request (⌘N)">＋ Request</button>
+    <button id="btn-rules" class="tb-btn" title="Map Local / Block">Reglas</button>
+    <button id="btn-settings" class="tb-btn" title="SSL Proxying">SSL</button>
+    <button id="btn-cert" class="tb-btn" title="Certificado raíz">Certificado <span id="cert-dot" class="dot"></span></button>
+  </header>
+
+  <div id="main">
+    <aside id="sidebar">
+      <div class="side-section">
+        <div class="side-item active" data-host="">Todos <span class="count" id="count-all">0</span></div>
+        <div class="side-item" data-host="__pinned">📌 Fijados <span class="count" id="count-pinned">0</span></div>
+      </div>
+      <div class="side-title">Dominios</div>
+      <div id="domains" class="side-section scroll"></div>
+    </aside>
+    <div class="resizer v" data-target="sidebar"></div>
+
+    <section id="content">
+      <div id="filters">
+        <button class="chip active" data-filter="all">Todo</button>
+        <button class="chip" data-filter="http">HTTP</button>
+        <button class="chip" data-filter="https">HTTPS</button>
+        <button class="chip" data-filter="ws">WebSocket</button>
+        <button class="chip" data-filter="json">JSON</button>
+        <button class="chip" data-filter="form">Form</button>
+        <button class="chip" data-filter="xml">XML</button>
+        <button class="chip" data-filter="js">JS</button>
+        <button class="chip" data-filter="css">CSS</button>
+        <button class="chip" data-filter="img">Imagen</button>
+        <button class="chip" data-filter="err">Errores</button>
+        <div class="tb-flex"></div>
+        <span id="status-text" class="muted"></span>
+      </div>
+
+      <div id="table">
+        <div class="thead row">
+          <div class="c id">#</div><div class="c status">Status</div><div class="c method">Método</div>
+          <div class="c host">Host</div><div class="c path">Path</div><div class="c type">Tipo</div>
+          <div class="c dur">Tiempo</div><div class="c size">Tamaño</div>
+        </div>
+        <div id="rows-viewport" tabindex="0"><div id="rows-spacer"><div id="rows"></div></div></div>
+        <div id="empty" class="empty">
+          <h2>Esperando tráfico…</h2>
+          <p>Configurá tu app, navegador o dispositivo para usar el proxy <b id="empty-addr"></b>,<br>
+            o activá <b>Proxy del sistema</b> arriba.</p>
+          <p class="muted">Para ver HTTPS: instalá el certificado y agregá dominios en <b>SSL</b>.</p>
+        </div>
+      </div>
+
+      <div class="resizer h" data-target="inspector"></div>
+
+      <div id="inspector">
+        <div id="inspector-empty" class="empty small">Seleccioná un request</div>
+        <div id="inspector-body" hidden>
+          <div id="summary-bar"></div>
+          <div id="panes">
+            <div class="pane" id="pane-req">
+              <div class="pane-head"><b>Request</b>
+                <div class="tabs" data-pane="req">
+                  <button data-tab="headers" class="active">Headers</button>
+                  <button data-tab="query">Query</button>
+                  <button data-tab="body">Body</button>
+                  <button data-tab="cookies">Cookies</button>
+                  <button data-tab="raw">Raw</button>
+                </div>
+              </div>
+              <div class="pane-content" id="req-content"></div>
+            </div>
+            <div class="resizer v" data-target="pane-req"></div>
+            <div class="pane" id="pane-res">
+              <div class="pane-head"><b>Response</b>
+                <div class="tabs" data-pane="res">
+                  <button data-tab="headers">Headers</button>
+                  <button data-tab="body" class="active">Body</button>
+                  <button data-tab="cookies">Set-Cookie</button>
+                  <button data-tab="raw">Raw</button>
+                  <button data-tab="timing">Timing</button>
+                </div>
+              </div>
+              <div class="pane-content" id="res-content"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div id="ctx-menu" class="menu" hidden></div>
+  <div id="modal-backdrop" hidden><div id="modal"></div></div>
+  <div id="toast" hidden></div>
+
+  <script src="util.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>
