@@ -661,6 +661,17 @@ function appMenu(e, appId) {
 }
 
 // Aviso cuando la app/dominio filtrado solo tiene conexiones HTTPS sin descifrar
+// Conexiones de la app seleccionada que no pasan por Proxyboy (se consulta cada pocos segundos)
+const direct = { appId: null, at: 0, data: null, pending: false };
+function checkDirect(appId) {
+  if (direct.pending || (direct.appId === appId && Date.now() - direct.at < 5000)) return;
+  direct.pending = true;
+  api.directConnections(appId).then((data) => {
+    direct.appId = appId; direct.at = Date.now(); direct.data = data; direct.pending = false;
+    renderHintBar();
+  }).catch(() => { direct.pending = false; });
+}
+
 function renderHintBar() {
   const bar = $('#hint-bar');
   let html = '';
@@ -669,7 +680,16 @@ function renderHintBar() {
     const app = flows[0] && flows[0].app;
     const tunnels = isSSLApp(app) ? [] : flows.filter((f) => f.method === 'CONNECT' && f.tags.includes('tunnel'));
     const sslErrors = flows.filter((f) => f.tags.includes('ssl-error'));
-    if (app && sslErrors.length && app.simulator && !(S.app.simulatorsWithCert || []).includes(app.udid)) {
+    if (app && app.source === 'process') checkDirect(app.id);
+    const d = direct.appId === S.appFilter ? direct.data : null;
+    if (app && d && d.count) {
+      const list = d.remotes.map(esc).join(', ');
+      html = S.app.systemProxy
+        ? `⚠ <span><b>${esc(app.name)}</b> tiene <b>${d.count}</b> conexión(es) abiertas que <b>no pasan por Proxyboy</b> (se abrieron antes de activar el proxy y la app las sigue reusando): esos requests no se ven. <span class="muted">${list}</span></span>
+          <span class="tb-flex"></span>${app.simulator && app.bundleId ? '<button class="btn primary" data-hint="restart">Reiniciar app</button>' : '<span class="muted">Reiniciá la app.</span>'}`
+        : `⚠ <span>El <b>proxy del sistema está apagado</b>: <b>${esc(app.name)}</b> se conecta directo (${d.count} conexión(es)) y sus requests no pasan por Proxyboy.</span>
+          <span class="tb-flex"></span><button class="btn primary" data-hint="sysproxy">Activar proxy del sistema</button>`;
+    } else if (app && sslErrors.length && app.simulator && !(S.app.simulatorsWithCert || []).includes(app.udid)) {
       html = `⚠ <span><b>${esc(app.name)}</b> rechaza el certificado: falta instalarlo en el simulador <b>${esc(app.device)}</b>.</span>
         <span class="tb-flex"></span><button class="btn primary" data-hint="cert">Instalar certificado en el simulador</button>`;
     } else if (app && tunnels.length) {
@@ -683,7 +703,8 @@ function renderHintBar() {
       if (!b || !app) return;
       if (b.dataset.hint === 'ssl') toggleSSLApp(app, true);
       if (b.dataset.hint === 'cert') installCertInSims([app.udid]).then(refresh);
-      if (b.dataset.hint === 'restart') restartSimApp(app);
+      if (b.dataset.hint === 'restart') restartSimApp(app).then(() => { direct.at = 0; });
+      if (b.dataset.hint === 'sysproxy') toggleSystemProxy().then(() => { direct.at = 0; refresh(); });
     };
   }
   if (bar.innerHTML !== html) bar.innerHTML = html;

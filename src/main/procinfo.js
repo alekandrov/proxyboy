@@ -257,4 +257,40 @@ class ProcessResolver {
   }
 }
 
-module.exports = { ProcessResolver, appFromUserAgent, isLoopback, describeExe };
+// ---------------- Conexiones que no pasan por el proxy ----------------
+// Una app que abrió conexiones antes de activar el proxy (o que lo ignora) las sigue reusando:
+// esos requests nunca llegan a Proxyboy. Devolvemos las conexiones TCP establecidas que no van al proxy.
+async function pidsForExe(exe) {
+  if (!exe || platform === 'win32') return [];
+  const out = await run('ps', ['-axo', 'pid=,comm=']);
+  return out.split('\n').map((l) => /^\s*(\d+)\s+(.+)$/.exec(l)).filter((m) => m && m[2].trim() === exe).map((m) => Number(m[1]));
+}
+
+async function directConnections(app, proxyPort) {
+  if (!app || !app.exe) return { pids: [], remotes: [] };
+  let pids = await pidsForExe(app.exe);
+  if (platform === 'win32' && app.pid) pids = [app.pid];
+  const remotes = [];
+  for (const pid of pids) {
+    if (platform === 'win32') {
+      const out = await run('netstat', ['-ano', '-p', 'TCP']);
+      for (const line of out.split(/\r?\n/)) {
+        const m = /^\s*TCP\s+\S+\s+(\S+):(\d+)\s+ESTABLISHED\s+(\d+)/i.exec(line);
+        if (m && Number(m[3]) === pid && !isLoopback(m[1])) remotes.push(`${m[1]}:${m[2]}`);
+      }
+    } else {
+      const out = await run('lsof', ['-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:ESTABLISHED', '-Fn']);
+      for (const line of out.split('\n')) {
+        const m = /^n.*->(.+):(\d+)$/.exec(line);
+        if (!m) continue;
+        const host = m[1].replace(/^\[|\]$/g, '');
+        if (isLoopback(host) && Number(m[2]) === proxyPort) continue; // pasa por Proxyboy
+        if (isLoopback(host)) continue; // conexiones locales (debugger, etc.)
+        remotes.push(`${host}:${m[2]}`);
+      }
+    }
+  }
+  return { pids, remotes };
+}
+
+module.exports = { ProcessResolver, appFromUserAgent, isLoopback, describeExe, directConnections };

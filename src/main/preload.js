@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('proxyboy', {
   androidClear: (serial) => ipcRenderer.invoke('android:clear', serial),
   installCertInSimulators: (udids) => ipcRenderer.invoke('sim:install-cert', udids),
   restartSimulatorApp: (udid, bundleId) => ipcRenderer.invoke('sim:restart-app', udid, bundleId),
+  directConnections: (appId) => ipcRenderer.invoke('app:direct', appId),
   appIcon: (id) => ipcRenderer.invoke('app:icon', id),
   resolveBreakpoint: (bpId, decision) => ipcRenderer.invoke('breakpoint:resolve', bpId, decision),
   onBreakpoint: (cb) => ipcRenderer.on('breakpoint', (_e, bp) => cb(bp)),

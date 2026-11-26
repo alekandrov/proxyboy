@@ -267,6 +267,12 @@ function registerIPC() {
     return { done, failed };
   });
   ipcMain.handle('sim:restart-app', (_e, udid, bundleId) => system.restartSimulatorApp(udid, bundleId));
+  ipcMain.handle('app:direct', async (_e, appId) => {
+    const info = proxy.apps.get(appId);
+    if (!info || info.source !== 'process' || info.android) return null;
+    const r = await require('./procinfo').directConnections(info, proxy.port);
+    return { count: r.remotes.length, remotes: [...new Set(r.remotes)].slice(0, 6), running: r.pids.length > 0 };
+  });
   ipcMain.handle('android:setup', async (_e, serial) => {
     const r = await android.setup(serial, proxy.port, ca.caCertPath);
     androidOwned.add(serial);
