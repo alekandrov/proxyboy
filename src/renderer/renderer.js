@@ -139,6 +139,18 @@ function refresh() {
     renderRows();
     renderSidebar();
     $('#empty').hidden = S.flows.length > 0;
+    const filtered = S.flows.length > 0 && S.view.length === 0;
+    $('#empty-filter').hidden = !filtered;
+    if (filtered) {
+      const parts = [];
+      if (S.appFilter) { const f = S.flows.find((x) => x.app && x.app.id === S.appFilter); parts.push(`app <b>${esc(f ? f.app.name : '')}</b>`); }
+      if (S.host && S.host !== '__pinned') parts.push(`dominio <b>${esc(S.host)}</b>`);
+      if (S.host === '__pinned') parts.push('solo <b>fijados</b>');
+      if (S.query) parts.push(`búsqueda <b>"${esc(S.query)}"</b>`);
+      if (S.chip !== 'all') parts.push(`tipo <b>${esc(S.chip)}</b>`);
+      $('#empty-filter-desc').innerHTML = `Filtros activos: ${parts.join(' · ')}`;
+    }
+    renderHintBar();
     $('#status-text').textContent = `${S.view.length} de ${S.flows.length} requests${S.recording ? '' : ' · en pausa'}`;
   });
 }
@@ -230,6 +242,7 @@ function renderSidebar() {
         title="${esc(app.name)}${sub ? ` — ${esc(sub)}` : ''}${app.source === 'user-agent' ? ' (detectada por User-Agent)' : ''}">
         <span class="twisty" data-act="toggle">${open ? '▾' : '▸'}</span>${appIconHTML(app)}
         <span class="name-wrap"><span class="name">${esc(app.name)}</span>${sub ? `<span class="app-sub">${esc(sub)}</span>` : ''}</span>
+        ${isSSLApp(app) ? '<span class="lock" title="SSL Proxying activo para esta app">🔓</span>' : ''}
         <span class="count">${count}</span></div>`;
     if (open) {
       for (const h of [...hosts.keys()].sort((x, y) => x.localeCompare(y))) appsHTML += domainItem(h, hosts.get(h), app.id, true);
@@ -586,6 +599,110 @@ async function rowMenu(e, id) {
   showMenu(e.clientX, e.clientY, items);
 }
 
+async function installCertInSims(udids) {
+  try {
+    const r = await api.installCertInSimulators(udids);
+    S.app = await api.state();
+    renderAppState();
+    if (r.failed.length) toast(`No se pudo instalar en ${r.failed.length} simulador(es): ${r.failed[0].error}`);
+    else toast('Certificado instalado en el simulador. Reiniciá la app para que use conexiones nuevas.');
+  } catch (e) { toast(`Error: ${e.message}`); }
+}
+
+function isSSLApp(app) {
+  const s = S.app && S.app.settings;
+  return !!(s && s.sslProxyingEnabled && app && (s.sslApps || []).includes(app.id));
+}
+
+async function toggleSSLApp(app, on) {
+  const list = new Set(S.app.settings.sslApps || []);
+  if (on) list.add(app.id); else list.delete(app.id);
+  S.app = await api.updateSettings({ sslApps: [...list] });
+  renderAppState(); lastSidebar = ''; refresh();
+  const needsCert = on && app.simulator && app.udid && !(S.app.simulatorsWithCert || []).includes(app.udid);
+  toast(on
+    ? `SSL Proxying activado para todo el tráfico de ${app.name}.${needsCert ? ' Falta instalar el certificado en el simulador.' : ' Las conexiones nuevas se van a descifrar.'}`
+    : `SSL Proxying desactivado para ${app.name}`);
+}
+
+function appHosts(appId) {
+  return [...new Set(S.flows.filter((f) => f.app && f.app.id === appId).map((f) => f.host))];
+}
+
+async function enableSSLForApp(app) {
+  const hosts = appHosts(app.id);
+  const current = new Set(S.app.settings.sslHosts);
+  const added = hosts.filter((h) => !current.has(h));
+  if (added.length) {
+    S.app = await api.updateSettings({ sslHosts: [...current, ...added] });
+    renderAppState(); lastSidebar = ''; refresh();
+  }
+  const needsCert = app.simulator && app.udid && !(S.app.simulatorsWithCert || []).includes(app.udid);
+  toast(`SSL Proxying activado para ${added.length} dominio(s) de ${app.name}.${needsCert ? ' Instalá el certificado en el simulador.' : ' Reiniciá la app para ver las conexiones nuevas.'}`);
+}
+
+async function restartSimApp(app) {
+  try {
+    await api.restartSimulatorApp(app.udid, app.bundleId);
+    toast(`${app.name} reiniciada en ${app.device}`);
+  } catch (e) { toast(`No se pudo reiniciar: ${e.message}`); }
+}
+
+function appMenu(e, appId) {
+  const f = S.flows.find((x) => x.app && x.app.id === appId);
+  if (!f) return;
+  const app = f.app;
+  const hosts = appHosts(appId);
+  const pending = hosts.filter((h) => !isSSLHost(h));
+  const certOk = (S.app.simulatorsWithCert || []).includes(app.udid);
+  showMenu(e.clientX, e.clientY, [
+    { label: 'Ver solo esta app', run: () => { S.appFilter = appId; S.host = ''; lastSidebar = ''; refresh(); } },
+    isSSLApp(app)
+      ? { label: `Deshabilitar SSL Proxying para ${app.name}`, run: () => toggleSSLApp(app, false) }
+      : { label: `Habilitar SSL Proxying para todo el tráfico de ${app.name}`, run: () => toggleSSLApp(app, true) },
+    ...(pending.length ? [{ label: `Habilitar SSL Proxying solo para sus dominios actuales (${pending.length})`, run: () => enableSSLForApp(app) }] : []),
+    ...(app.simulator && app.udid ? [
+      '-',
+      { label: `${certOk ? 'Reinstalar' : 'Instalar'} certificado en ${app.device}`, run: () => installCertInSims([app.udid]) },
+      ...(app.bundleId ? [{ label: `Reiniciar ${app.name} en el simulador`, run: () => restartSimApp(app) }] : []),
+    ] : []),
+    '-',
+    { label: 'Eliminar sus requests', run: async () => {
+      S.selected = new Set(S.flows.filter((x) => x.app && x.app.id === appId).map((x) => x.id)); await deleteSelected();
+    } },
+  ]);
+}
+
+// Aviso cuando la app/dominio filtrado solo tiene conexiones HTTPS sin descifrar
+function renderHintBar() {
+  const bar = $('#hint-bar');
+  let html = '';
+  if (S.appFilter) {
+    const flows = S.flows.filter((f) => f.app && f.app.id === S.appFilter);
+    const app = flows[0] && flows[0].app;
+    const tunnels = isSSLApp(app) ? [] : flows.filter((f) => f.method === 'CONNECT' && f.tags.includes('tunnel'));
+    const sslErrors = flows.filter((f) => f.tags.includes('ssl-error'));
+    if (app && sslErrors.length && app.simulator && !(S.app.simulatorsWithCert || []).includes(app.udid)) {
+      html = `⚠ <span><b>${esc(app.name)}</b> rechaza el certificado: falta instalarlo en el simulador <b>${esc(app.device)}</b>.</span>
+        <span class="tb-flex"></span><button class="btn primary" data-hint="cert">Instalar certificado en el simulador</button>`;
+    } else if (app && tunnels.length) {
+      html = `🔒 <span><b>${tunnels.length}</b> conexión(es) HTTPS de <b>${esc(app.name)}</b> no se descifran: SSL Proxying no está activo para esta app.</span>
+        <span class="tb-flex"></span><button class="btn primary" data-hint="ssl">Habilitar SSL Proxying</button>
+        ${app.simulator && app.udid && !(S.app.simulatorsWithCert || []).includes(app.udid) ? '<button class="btn" data-hint="cert">Instalar certificado en el simulador</button>' : ''}
+        ${app.simulator && app.bundleId ? '<button class="btn" data-hint="restart">Reiniciar app</button>' : ''}`;
+    }
+    bar.onclick = (ev) => {
+      const b = ev.target.closest('[data-hint]');
+      if (!b || !app) return;
+      if (b.dataset.hint === 'ssl') toggleSSLApp(app, true);
+      if (b.dataset.hint === 'cert') installCertInSims([app.udid]).then(refresh);
+      if (b.dataset.hint === 'restart') restartSimApp(app);
+    };
+  }
+  if (bar.innerHTML !== html) bar.innerHTML = html;
+  bar.hidden = !html;
+}
+
 function hostMenu(e, host) {
   const parts = host.split('.');
   const wildcardHost = parts.length > 2 ? `*.${parts.slice(-2).join('.')}` : `*.${host}`;
@@ -703,12 +820,24 @@ function openCertificate() {
     : a.platform === 'win32' ? 'Se agregará al almacén "Entidades de certificación raíz de confianza" del usuario (Windows pedirá confirmación).'
       : 'En Linux: sudo cp proxyboy-ca.pem /usr/local/share/ca-certificates/proxyboy-ca.crt && sudo update-ca-certificates'}</div>
     <div class="muted">Firefox usa su propio almacén: importalo en Ajustes → Privacidad → Certificados. Node.js: export NODE_EXTRA_CA_CERTS=&lt;archivo&gt;.</div>
-    <h3 style="margin:6px 0 0">Dispositivos móviles / simuladores</h3>
+    ${a.platform === 'darwin' ? `<h3 style="margin:6px 0 0">Simuladores de iOS</h3>
+    <div class="muted">Cada simulador tiene su propio almacén de certificados: que la Mac confíe en Proxyboy no alcanza.</div>
+    ${(a.simulators || []).length ? a.simulators.map((s) => `<div class="sim-row">📱 <b>${esc(s.name)}</b> <span class="muted">${esc(s.os)}</span>
+      <span class="tb-flex"></span>${a.simulatorsWithCert.includes(s.udid) ? '<span class="s-ok">✔ instalado</span>' : '<span class="muted">sin instalar</span>'}</div>`).join('')
+    : '<div class="muted">No hay simuladores encendidos.</div>'}` : ''}
+    <h3 style="margin:6px 0 0">Celulares por Wi-Fi</h3>
     <div>1. Configurá el proxy HTTP del Wi-Fi del dispositivo a:<br><span class="mono">${ips}</span></div>
     <div>2. Desde el dispositivo abrí <b class="mono">http://proxy.boy</b> y descargá el certificado.</div>
     <div class="muted">iOS: Ajustes → General → Información → Confianza de certificados → activar Proxyboy.<br>
     Android 7+: las apps deben confiar en CAs de usuario vía network_security_config (solo builds debug).</div>`,
   [
+    ...((a.simulators || []).length ? [{
+      label: 'Instalar en simuladores', run: async () => {
+        await installCertInSims(a.simulators.map((s) => s.udid));
+        openCertificate();
+        return true;
+      },
+    }] : []),
     { label: 'Mostrar archivo', run: () => { api.revealCert(); return true; } },
     { label: 'Exportar…', run: async () => { await api.exportCert(); return true; } },
     { label: 'Cerrar' },
@@ -1094,6 +1223,8 @@ function bindUI() {
     if (it) toggleApp(it.dataset.app);
   });
   $('#sidebar').addEventListener('contextmenu', (e) => {
+    const appItem = e.target.closest('#apps .side-item:not(.child)');
+    if (appItem) { e.preventDefault(); appMenu(e, appItem.dataset.app); return; }
     const it = e.target.closest('#domains .side-item, #apps .side-item.child');
     if (!it) return;
     e.preventDefault();
@@ -1121,6 +1252,12 @@ function bindUI() {
     renderInspector();
   }));
 
+  $('#btn-clear-filters').onclick = () => {
+    S.appFilter = ''; S.host = ''; S.query = ''; S.chip = 'all';
+    $('#search').value = '';
+    $$('.chip').forEach((x) => x.classList.toggle('active', x.dataset.filter === 'all'));
+    lastSidebar = ''; refresh();
+  };
   $('#btn-record').onclick = toggleRecording;
   $('#btn-clear').onclick = clearAll;
   $('#btn-system-proxy').onclick = toggleSystemProxy;

@@ -162,6 +162,7 @@ async function describeExe(pid, { exe, description }) {
   if (sim) {
     const dev = await simulatorDevice(sim[1]);
     info.simulator = true;
+    info.udid = sim[1];
     info.device = dev.device;
     info.os = dev.os;
     info.id = `${info.id}@${sim[1]}`;

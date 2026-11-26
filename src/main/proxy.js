@@ -154,6 +154,7 @@ class ProxyServer extends EventEmitter {
       sslProxyingEnabled: true,
       sslProxyAll: false,
       sslHosts: [], // ej: ['*.uala.com.ar', 'api.example.com']
+      sslApps: [],  // ids de apps cuyo tráfico HTTPS se descifra entero (cualquier dominio)
       verifyUpstreamTLS: true,
       http2: true,
       recording: true,
@@ -342,7 +343,10 @@ class ProxyServer extends EventEmitter {
       error: f.error || null,
       tags: f.tags,
       client: f.client,
-      app: f.app ? { id: f.app.id, name: f.app.name, simulator: !!f.app.simulator, device: f.app.device, os: f.app.os, source: f.app.source } : null,
+      app: f.app ? {
+        id: f.app.id, name: f.app.name, simulator: !!f.app.simulator, device: f.app.device, os: f.app.os,
+        source: f.app.source, bundleId: f.app.bundleId, udid: f.app.udid,
+      } : null,
       wsCount: f.ws ? f.ws.length : 0,
     };
   }
@@ -782,13 +786,25 @@ Ajustes → General → Información → Ajustes de confianza de certificados.</
   }
 
   // ---------- CONNECT (HTTPS) ----------
-  _onConnect(req, clientSocket, head) {
+  _appIntercepted(app) {
+    const list = this.settings.sslApps || [];
+    return !!app && this.settings.sslProxyingEnabled && (list.includes(app.id) || (app.bundleId && list.includes(app.bundleId)));
+  }
+
+  async _onConnect(req, clientSocket, head) {
     const [host, portStr] = req.url.split(/:(?=\d+$)/);
     const port = Number(portStr) || 443;
     clientSocket.on('error', () => {});
 
     const forced = req.headers['x-proxyboy-intercept'] === '1';
-    if (forced || this.shouldIntercept(host)) {
+    let intercept = forced || this.shouldIntercept(host);
+    // SSL Proxying por app: esperamos (con tope) a saber qué app abrió la conexión
+    const holder = clientSocket._pbClient;
+    if (!intercept && (this.settings.sslApps || []).length && holder) {
+      await this._waitClient(holder);
+      intercept = this._appIntercepted(holder.app);
+    }
+    if (intercept) {
       clientSocket.write('HTTP/1.1 200 Connection Established\r\nProxy-Agent: Proxyboy\r\n\r\n');
       if (head && head.length) clientSocket.unshift(head);
       clientSocket.once('readable', () => {

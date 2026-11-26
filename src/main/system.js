@@ -154,7 +154,37 @@ function localIPs() {
   return out;
 }
 
+// ---------------- Simuladores de iOS (solo macOS con Xcode) ----------------
+async function bootedSimulators() {
+  if (platform !== 'darwin') return [];
+  try {
+    const data = JSON.parse(await run('xcrun', ['simctl', 'list', 'devices', 'booted', '-j']));
+    const out = [];
+    for (const [runtime, devices] of Object.entries(data.devices || {})) {
+      const m = /SimRuntime\.(\w+)-([\d-]+)/.exec(runtime);
+      for (const d of devices) {
+        if (d.state === 'Booted') out.push({ udid: d.udid, name: d.name, os: m ? `${m[1]} ${m[2].replace(/-/g, '.')}` : '' });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+// Agrega la CA de Proxyboy como raíz confiable en el simulador (equivalente a instalar el perfil + confianza total)
+async function installCertInSimulator(udid, certPath) {
+  await run('xcrun', ['simctl', 'keychain', udid, 'add-root-cert', certPath]);
+}
+
+// Reinicia una app del simulador: cierra sus conexiones viejas para que las nuevas pasen por el proxy
+async function restartSimulatorApp(udid, bundleId) {
+  try { await run('xcrun', ['simctl', 'terminate', udid, bundleId]); } catch { /* no estaba corriendo */ }
+  await run('xcrun', ['simctl', 'launch', udid, bundleId]);
+}
+
 module.exports = {
   enableSystemProxy, disableSystemProxy, isSystemProxyEnabled,
   installCertificate, isCertificateTrusted, removeCertificate, localIPs,
+  bootedSimulators, installCertInSimulator, restartSimulatorApp,
 };

@@ -20,6 +20,7 @@ const defaults = {
   sslProxyingEnabled: true,
   sslProxyAll: false,
   sslHosts: [],
+  sslApps: [],
   verifyUpstreamTLS: true,
   http2: true,
   mapLocalRules: [],
@@ -43,6 +44,7 @@ function applySettingsToProxy() {
     sslProxyingEnabled: settings.sslProxyingEnabled,
     sslProxyAll: settings.sslProxyAll,
     sslHosts: settings.sslHosts,
+    sslApps: settings.sslApps,
     verifyUpstreamTLS: settings.verifyUpstreamTLS,
     http2: settings.http2,
   });
@@ -125,6 +127,8 @@ async function state() {
     caFingerprint: ca.caFingerprint,
     caCommonName: ca.caCert.subject.getField('CN').value,
     caTrusted: await system.isCertificateTrusted(ca.caCertPath, ca.caCert.subject.getField('CN').value),
+    simulators: await system.bootedSimulators(),
+    simulatorsWithCert: settings.simulatorsWithCert || [],
     systemProxy: await system.isSystemProxyEnabled(proxy.port),
     ips: system.localIPs(),
   };
@@ -246,6 +250,17 @@ function registerIPC() {
     return true;
   });
   ipcMain.handle('cert:reveal', () => shell.showItemInFolder(ca.caCertPath));
+  ipcMain.handle('sim:install-cert', async (_e, udids) => {
+    const done = [];
+    const failed = [];
+    for (const udid of udids) {
+      try { await system.installCertInSimulator(udid, ca.caCertPath); done.push(udid); } catch (e) { failed.push({ udid, error: e.message }); }
+    }
+    settings.simulatorsWithCert = [...new Set([...(settings.simulatorsWithCert || []), ...done])];
+    saveSettings();
+    return { done, failed };
+  });
+  ipcMain.handle('sim:restart-app', (_e, udid, bundleId) => system.restartSimulatorApp(udid, bundleId));
 
   // Íconos de apps: PNG del bundle (apps del simulador iOS) o ícono del sistema (apps de macOS / .exe de Windows)
   const iconCache = new Map();

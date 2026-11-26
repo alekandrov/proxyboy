@@ -55,6 +55,7 @@
         <span id="status-text" class="muted"></span>
       </div>
 
+      <div id="hint-bar" hidden></div>
       <div id="table">
         <div class="thead row">
           <div class="c id">#</div><div class="c status">Status</div><div class="c method">Método</div>
@@ -67,6 +68,11 @@
           <p>Configurá tu app, navegador o dispositivo para usar el proxy <b id="empty-addr"></b>,<br>
             o activá <b>Proxy del sistema</b> arriba.</p>
           <p class="muted">Para ver HTTPS: instalá el certificado y agregá dominios en <b>SSL</b>.</p>
+        </div>
+        <div id="empty-filter" class="empty" hidden>
+          <h2>Ningún request coincide</h2>
+          <p id="empty-filter-desc"></p>
+          <p><button class="btn" id="btn-clear-filters">Limpiar filtros</button></p>
         </div>
       </div>
 

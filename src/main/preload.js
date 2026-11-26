@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('proxyboy', {
   exportHAR: (ids) => ipcRenderer.invoke('har:export', ids),
   saveBody: (base64, name) => ipcRenderer.invoke('body:save', { base64, name }),
   copy: (text) => ipcRenderer.invoke('clipboard:write', text),
+  installCertInSimulators: (udids) => ipcRenderer.invoke('sim:install-cert', udids),
+  restartSimulatorApp: (udid, bundleId) => ipcRenderer.invoke('sim:restart-app', udid, bundleId),
   appIcon: (id) => ipcRenderer.invoke('app:icon', id),
   resolveBreakpoint: (bpId, decision) => ipcRenderer.invoke('breakpoint:resolve', bpId, decision),
   onBreakpoint: (cb) => ipcRenderer.on('breakpoint', (_e, bp) => cb(bp)),

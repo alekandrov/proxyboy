@@ -272,6 +272,17 @@ function wsServer() {
     }
   });
 
+  await check('SSL Proxying por app: descifra cualquier dominio de esa app', async () => {
+    const curlId = lastFlow('/hola').app.id;
+    proxy.updateSettings({ sslApps: [curlId] });
+    // 127.0.0.1 no está en sslHosts: sin la regla por app sería un túnel
+    JSON.parse(await curl('--cacert', caFile, `https://127.0.0.1:${sp}/por-app`).catch(() => '{}'));
+    const f = lastFlow('/por-app');
+    assert.ok(f, 'el request debería verse descifrado');
+    assert.strictEqual(f.app.name, 'curl');
+    proxy.updateSettings({ sslApps: [] });
+  });
+
   await check('App por User-Agent (celulares / respaldo)', async () => {
     const { appFromUserAgent } = require('../src/main/procinfo');
     const ios = appFromUserAgent('Ual%C3%A1/7.0.4 CFNetwork/1568.100.1 Darwin/24.0.0', '192.168.0.23');

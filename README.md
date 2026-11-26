@@ -36,9 +36,10 @@ npm install
 npm start
 ```
 
-1. Tocá **Certificado → Instalar y confiar** (una sola vez).
+1. Tocá **Certificado → Instalar y confiar** (una sola vez). Si usás el simulador de iOS, tocá también **Instalar en simuladores**: cada simulador tiene su propio almacén de certificados.
 2. Tocá **Proxy del sistema**, o configurá tu app/dispositivo con `IP:9090`.
-3. En **SSL** agregá los dominios a descifrar (o clic derecho sobre un dominio → *Habilitar SSL Proxying*).
+3. Elegí qué descifrar: clic derecho sobre una app → *Habilitar SSL Proxying para todo el tráfico de…*, o sobre un dominio, o agregá patrones en **SSL** (ej. `*.ua.la`).
+4. Las apps reutilizan conexiones abiertas: si no ves requests nuevos, reiniciá la app (para apps del simulador: clic derecho → *Reiniciar en el simulador*).
 
 ### Celular / simulador
 Poné el proxy HTTP del Wi-Fi en `IP-de-tu-compu:9090`, abrí `http://proxy.boy` y descargá el certificado.
