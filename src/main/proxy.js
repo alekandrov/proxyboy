@@ -537,8 +537,10 @@ class ProxyServer extends EventEmitter {
 
     // Map Remote
     const remote = findRule(rules.mapRemote, method, url);
-    if (remote && remote.to) {
-      const mapped = applyMapRemote(remote, url);
+    let mapped = null;
+    // Las reglas se guardan mientras se escriben: un destino incompleto se ignora
+    if (remote && remote.to) { try { mapped = applyMapRemote(remote, url); } catch { mapped = null; } }
+    if (mapped) {
       flow.originalUrl = url;
       flow.tags.push('map-remote');
       this._note(flow, `Map Remote: ${url} → ${mapped}`);

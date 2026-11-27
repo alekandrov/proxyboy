@@ -736,10 +736,14 @@ function togglePin(host) {
 }
 
 // ---------------- Modales ----------------
-function openModal(title, bodyHTML, buttons, { wide = false } = {}) {
+let modalOnClose = null;
+function openModal(title, bodyHTML, buttons, { wide = false, note = '', onClose = null } = {}) {
+  if (modalOnClose) { const f = modalOnClose; modalOnClose = null; f(); }
+  modalOnClose = onClose;
   $('#modal').classList.toggle('wide', wide);
-  $('#modal').innerHTML = `<div class="m-head">${esc(title)}</div><div class="m-body">${bodyHTML}</div>
-    <div class="m-foot">${buttons.map((b, i) => `<button class="btn ${b.cls || ''}" data-b="${i}">${esc(b.label)}</button>`).join('')}</div>`;
+  $('#modal').style.transform = '';
+  $('#modal').innerHTML = `<div class="m-head" title="Arrastrá para mover">${esc(title)}</div><div class="m-body">${bodyHTML}</div>
+    <div class="m-foot">${note ? `<span class="muted m-note">${note}</span><span class="tb-flex"></span>` : ''}${buttons.map((b, i) => `<button class="btn ${b.cls || ''}" data-b="${i}">${esc(b.label)}</button>`).join('')}</div>`;
   $('#modal-backdrop').hidden = false;
   $('#modal .m-foot').onclick = async (e) => {
     const el = e.target.closest('button');
@@ -751,8 +755,34 @@ function openModal(title, bodyHTML, buttons, { wide = false } = {}) {
   const first = $('#modal input, #modal textarea');
   if (first) first.focus();
 }
-function closeModal() { $('#modal-backdrop').hidden = true; $('#modal').innerHTML = ''; }
+function closeModal() {
+  if (modalOnClose) { const f = modalOnClose; modalOnClose = null; f(); }
+  $('#modal-backdrop').hidden = true; $('#modal').innerHTML = '';
+}
 $('#modal-backdrop').addEventListener('mousedown', (e) => { if (e.target.id === 'modal-backdrop') closeModal(); });
+
+// Los modales se mueven arrastrando el título
+function makeDraggable(box) {
+  box.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || !e.target.closest('.m-head') || e.target.closest('button, input, select')) return;
+    e.preventDefault();
+    const m = /translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(box.style.transform) || [0, 0, 0];
+    const ox = Number(m[1]) - e.clientX;
+    const oy = Number(m[2]) - e.clientY;
+    const move = (ev) => {
+      // Que el título no se pueda sacar de la ventana
+      const dx = Math.min(Math.max(ev.clientX, 40), window.innerWidth - 40) + ox;
+      const dy = Math.min(Math.max(ev.clientY, 10), window.innerHeight - 20) + oy;
+      box.style.transform = `translate(${dx}px, ${dy}px)`;
+    };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); document.body.classList.remove('modal-dragging'); };
+    document.body.classList.add('modal-dragging');
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+}
+makeDraggable($('#modal'));
+makeDraggable($('#bp-modal'));
 
 const headersToText = (pairs) => (pairs || []).map(([k, v]) => `${k}: ${v}`).join('\n');
 const textToHeaders = (txt) => txt.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
@@ -930,7 +960,7 @@ const RULE_TYPES = {
     label: 'Map Local', hint: 'Responde con un mock sin ir al servidor',
     fields: [[F.method, F.url, { key: 'status', label: 'Status', type: 'number', narrow: true }],
       { key: 'headers', label: 'Headers de respuesta', type: 'headers', rows: 4 },
-      { key: 'body', label: 'Body de respuesta', type: 'textarea', rows: 10 }],
+      { key: 'body', label: 'Body de respuesta', type: 'textarea', rows: 10, view: true }],
     make: () => ({ method: 'GET', url: 'https://api.example.com/*', status: 200, headers: [['Content-Type', 'application/json']], body: '{\n  "ok": true\n}' }),
     summary: (r) => String(r.status),
   },
@@ -1006,12 +1036,42 @@ async function addBlockRule(url) {
   await addRule('blockRules', { method: '*', url }, `Bloqueado: ${url}`);
 }
 
+// Body Pretty (JSON indentado) o Raw (JSON en una línea). Si no es JSON válido queda como está.
+function formatBody(text, mode) {
+  try {
+    const v = JSON.parse(text);
+    return mode === 'pretty' ? JSON.stringify(v, null, 2) : JSON.stringify(v);
+  } catch { return null; }
+}
+const bodyViewPref = () => { try { return localStorage.getItem('mapLocalBodyView') || 'pretty'; } catch { return 'pretty'; } };
+
 function openRules(type = 'mapLocalRules', prefill) {
   const lists = {};
   for (const k of Object.keys(RULE_TYPES)) lists[k] = JSON.parse(JSON.stringify(S.app.settings[k] || []));
   let current = type;
   let editing = null;
-  if (prefill) { editing = { id: Date.now(), enabled: true, ...RULE_TYPES[type].make(), ...prefill }; lists[type].push(editing); }
+  let bodyView = bodyViewPref();
+  if (prefill) {
+    editing = { id: Date.now(), enabled: true, ...RULE_TYPES[type].make(), ...prefill };
+    if (type === 'mapLocalRules' && editing.body) editing.body = formatBody(editing.body, bodyView) ?? editing.body;
+    lists[type].push(editing);
+  }
+
+  // Autoguardado: cada cambio se aplica al proxy (con un pequeño debounce mientras se escribe)
+  let saveTimer = null;
+  const saveNow = async () => {
+    clearTimeout(saveTimer); saveTimer = null;
+    S.app = await api.updateSettings(JSON.parse(JSON.stringify(lists)));
+    const st = $('#rules-saved');
+    if (st) { st.textContent = '✓ Guardado'; st.classList.add('flash'); setTimeout(() => st.classList.remove('flash'), 600); }
+  };
+  const save = (delay = 250) => {
+    clearTimeout(saveTimer);
+    const st = $('#rules-saved');
+    if (st) st.textContent = 'Guardando…';
+    saveTimer = setTimeout(saveNow, delay);
+  };
+  if (prefill) save(0);
 
   const fieldHTML = (f, r) => {
     const v = r[f.key];
@@ -1019,6 +1079,8 @@ function openRules(type = 'mapLocalRules', prefill) {
     if (f.type === 'checkbox') return `<label class="inline"><input type="checkbox" id="${id}" data-k="${f.key}" ${v ? 'checked' : ''}> ${esc(f.label)}</label>`;
     if (f.type === 'textarea' || f.type === 'headers') {
       const val = f.type === 'headers' ? headersToText(v) : (v || '');
+      const view = f.view ? `<span class="seg body-view">${['pretty', 'raw'].map((m) => `<button type="button" class="small-btn${bodyView === m ? ' active' : ''}" data-view="${m}">${m === 'pretty' ? 'Pretty' : 'Raw'}</button>`).join('')}</span>` : '';
+      if (f.view) return `<div class="field"><div class="field-head">${esc(f.label)}<span class="tb-flex"></span>${view}</div><textarea id="${id}" data-k="${f.key}" data-type="${f.type}" data-view-field rows="${f.rows || 6}" spellcheck="false" class="code-editor">${esc(val)}</textarea></div>`;
       return `<label>${esc(f.label)}<textarea id="${id}" data-k="${f.key}" data-type="${f.type}" rows="${f.rows || 6}" spellcheck="false" ${f.code ? 'class="code-editor"' : ''}>${esc(val)}</textarea></label>`;
     }
     return `<label class="${f.narrow ? 'narrow' : ''}">${esc(f.label)}<input id="${id}" data-k="${f.key}" ${f.type === 'number' ? 'type="number"' : ''} value="${esc(v ?? '')}" placeholder="${esc(f.placeholder || '')}" spellcheck="false"></label>`;
@@ -1052,22 +1114,16 @@ function openRules(type = 'mapLocalRules', prefill) {
     else if (e.target.dataset.type === 'headers') editing[k] = textToHeaders(e.target.value);
     else if (e.target.type === 'number') editing[k] = Number(e.target.value);
     else editing[k] = k === 'method' ? e.target.value.toUpperCase() : e.target.value;
+    save();
   };
 
   openModal('Reglas', '<div id="rules-root" style="display:flex;flex-direction:column;gap:8px"></div>', [
-    { label: 'Cerrar' },
-    {
-      label: 'Guardar', cls: 'primary', run: async () => {
-        try {
-          for (const r of lists.mapRemoteRules) if (r.enabled) new URL(r.to);
-        } catch { toast('Map Remote: el destino debe ser una URL válida (ej. http://localhost:8080)'); return true; }
-        S.app = await api.updateSettings(lists);
-        toast('Reglas guardadas');
-        draw(); // refresca los contadores de las pestañas
-        return true; // la ventana queda abierta para seguir editando
-      },
-    },
-  ], { wide: true });
+    { label: 'Cerrar', cls: 'primary' },
+  ], {
+    wide: true,
+    note: '<span id="rules-saved">Los cambios se aplican al instante</span>',
+    onClose: () => { if (saveTimer) saveNow(); },
+  });
   draw();
   const root = $('#rules-root');
   root.addEventListener('input', onInput);
@@ -1075,6 +1131,8 @@ function openRules(type = 'mapLocalRules', prefill) {
     if (e.target.dataset.toggle !== undefined) {
       const r = lists[current].find((x) => x.id === Number(e.target.closest('.rule').dataset.id));
       if (r) r.enabled = e.target.checked;
+      save(0);
+      updateBadges();
       return;
     }
     if (e.target.dataset.k) {
@@ -1086,6 +1144,31 @@ function openRules(type = 'mapLocalRules', prefill) {
         row.querySelector('.muted').textContent = RULE_TYPES[current].summary(editing);
       }
     }
+  });
+  const updateBadges = () => {
+    root.querySelectorAll('.rule-tabs button').forEach((b) => {
+      const n = lists[b.dataset.type].filter((r) => r.enabled).length;
+      b.innerHTML = `${esc(RULE_TYPES[b.dataset.type].label)}${n ? ` <span class="badge">${n}</span>` : ''}`;
+    });
+  };
+  // Al pegar en el body se respeta la vista elegida (Pretty / Raw)
+  root.addEventListener('paste', (e) => {
+    const t = e.target;
+    if (!t.hasAttribute || !t.hasAttribute('data-view-field')) return;
+    const pasted = (e.clipboardData || {}).getData ? e.clipboardData.getData('text') : '';
+    const { selectionStart: a, selectionEnd: b } = t;
+    const whole = `${t.value.slice(0, a)}${pasted}${t.value.slice(b)}`;
+    const out = formatBody(whole, bodyView) ?? formatBody(pasted, bodyView);
+    if (out == null) return; // no es JSON: pegado normal
+    e.preventDefault();
+    if (formatBody(whole, bodyView) != null) {
+      t.value = out;
+      t.selectionStart = t.selectionEnd = out.length;
+    } else {
+      t.value = `${t.value.slice(0, a)}${out}${t.value.slice(b)}`;
+      t.selectionStart = t.selectionEnd = a + out.length;
+    }
+    onInput({ target: t });
   });
   root.addEventListener('keydown', (e) => {
     // Tab inserta indentación en el editor de código
@@ -1101,10 +1184,24 @@ function openRules(type = 'mapLocalRules', prefill) {
   root.addEventListener('click', (e) => {
     const tab = e.target.closest('.rule-tabs button');
     if (tab) { current = tab.dataset.type; editing = null; draw(); return; }
+    const vb = e.target.closest('[data-view]');
+    if (vb) {
+      const mode = vb.dataset.view;
+      const t = root.querySelector('[data-view-field]');
+      const out = t && formatBody(t.value, mode);
+      if (t && t.value.trim() && out == null) { toast('El body no es JSON válido: no se puede cambiar la vista'); return; }
+      bodyView = mode;
+      try { localStorage.setItem('mapLocalBodyView', mode); } catch { /* sin storage */ }
+      root.querySelectorAll('[data-view]').forEach((x) => x.classList.toggle('active', x.dataset.view === mode));
+      if (t && out != null && out !== t.value) { t.value = out; onInput({ target: t }); }
+      return;
+    }
     if (e.target.id === 'r-add') {
       editing = { id: Date.now(), enabled: true, ...RULE_TYPES[current].make() };
+      if (current === 'mapLocalRules') editing.body = formatBody(editing.body, bodyView) ?? editing.body;
       lists[current].push(editing);
       draw();
+      save(0);
       return;
     }
     const row = e.target.closest('.rule');
@@ -1114,8 +1211,14 @@ function openRules(type = 'mapLocalRules', prefill) {
       lists[current] = lists[current].filter((r) => r.id !== id);
       if (editing && editing.id === id) editing = null;
       draw();
+      save(0);
     } else if (e.target.dataset.toggle === undefined) {
       editing = lists[current].find((r) => r.id === id);
+      // Mostramos el body con la vista elegida
+      if (current === 'mapLocalRules' && editing && editing.body) {
+        const out = formatBody(editing.body, bodyView);
+        if (out != null && out !== editing.body) { editing.body = out; save(); }
+      }
       draw();
     }
   });
@@ -1222,6 +1325,21 @@ function toast(msg) {
   toastTimer = setTimeout(() => { t.hidden = true; }, 2600);
 }
 
+// Mueve la selección una fila (Shift extiende la selección) y la mantiene visible
+function moveSelection(step, extend) {
+  if (!S.view.length) return;
+  let i = S.view.findIndex((f) => f.id === S.focusId);
+  i = i < 0 ? (step > 0 ? 0 : S.view.length - 1) : Math.min(S.view.length - 1, Math.max(0, i + step));
+  const f = S.view[i];
+  if (!f) return;
+  if (extend) { S.selected.add(f.id); S.focusId = f.id; renderRows(); loadDetail(f.id); } else select(f.id);
+  const vp = $('#rows-viewport');
+  // El encabezado es sticky: la fila i empieza en HEAD_H + i * ROW_H dentro del área con scroll
+  const y = i * ROW_H;
+  if (y < vp.scrollTop) vp.scrollTop = y;
+  else if (HEAD_H + y + ROW_H > vp.scrollTop + vp.clientHeight) vp.scrollTop = HEAD_H + y + ROW_H - vp.clientHeight;
+}
+
 // ---------------- Eventos de la UI ----------------
 function bindUI() {
   $('#rows-viewport').addEventListener('scroll', renderRows);
@@ -1246,16 +1364,7 @@ function bindUI() {
   $('#rows-viewport').addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
-      let i = S.view.findIndex((f) => f.id === S.focusId);
-      i = e.key === 'ArrowDown' ? Math.min(S.view.length - 1, i + 1) : Math.max(0, i - 1);
-      if (S.view[i]) {
-        select(S.view[i].id);
-        const vp = $('#rows-viewport');
-        // El encabezado es sticky: la fila i empieza en HEAD_H + i * ROW_H dentro del área con scroll
-        const y = i * ROW_H;
-        if (y < vp.scrollTop) vp.scrollTop = y;
-        else if (HEAD_H + y + ROW_H > vp.scrollTop + vp.clientHeight) vp.scrollTop = HEAD_H + y + ROW_H - vp.clientHeight;
-      }
+      moveSelection(e.key === 'ArrowDown' ? 1 : -1, e.shiftKey);
     } else if (e.key === 'Backspace' || e.key === 'Delete') {
       deleteSelected();
     } else if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
@@ -1340,6 +1449,16 @@ function bindUI() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { closeModal(); $('#ctx-menu').hidden = true; }
+    // ↑/↓ recorren la lista de requests salvo que se esté escribiendo o haya un modal abierto
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const t = e.target;
+      const typing = t.closest && t.closest('input, textarea, select, [contenteditable="true"], #rows-viewport');
+      if (!typing && $('#modal-backdrop').hidden && $('#bp-backdrop').hidden) {
+        e.preventDefault();
+        $('#rows-viewport').focus({ preventScroll: true });
+        moveSelection(e.key === 'ArrowDown' ? 1 : -1, e.shiftKey);
+      }
+    }
     if ((e.metaKey || e.ctrlKey) && e.key === 'f') { e.preventDefault(); $('#search').focus(); $('#search').select(); }
   });
 

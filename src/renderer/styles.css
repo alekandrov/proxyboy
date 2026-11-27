@@ -290,3 +290,15 @@ body.col-resizing, body.col-resizing * { cursor: col-resize !important; }
 .c.k-client .app-icon { width: 15px; height: 15px; border-radius: 3px; }
 .c.k-client span { overflow: hidden; text-overflow: ellipsis; }
 .state-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: currentColor; vertical-align: middle; }
+
+/* ---------- Modales movibles / editor de reglas ---------- */
+#modal .m-head, #bp-modal .m-head { cursor: move; user-select: none; }
+body.modal-dragging, body.modal-dragging * { cursor: move !important; user-select: none !important; }
+#modal .m-note { font-size: 11px; transition: color .3s; }
+#modal .m-note .flash, #modal #rules-saved.flash { color: var(--accent); }
+#modal .field { display: flex; flex-direction: column; gap: 4px; }
+#modal .field-head { display: flex; align-items: center; font-weight: 500; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
+.seg .small-btn { border: 0; background: var(--bg); padding: 2px 10px; cursor: pointer; font-size: 11px; color: var(--fg); border-radius: 0; }
+.seg .small-btn + .small-btn { border-left: 1px solid var(--border); }
+.seg .small-btn.active { background: var(--accent); color: #fff; }
